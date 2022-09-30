@@ -1,0 +1,8 @@
+[package]
+name = "terminal"
+version = "0.1.0"
+authors = ["Arnavion <me@arnavion.dev>"]
+edition = "2021"
+
+[dependencies]
+libc = { version = "0.2", default-features = false }
