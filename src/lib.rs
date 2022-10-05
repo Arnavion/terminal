@@ -1,9 +1,16 @@
 #![deny(rust_2018_idioms, warnings)]
 #![deny(clippy::all, clippy::pedantic)]
 #![allow(
+	clippy::default_trait_access,
+	clippy::let_and_return,
 	clippy::let_underscore_drop,
 	clippy::missing_errors_doc,
+	clippy::missing_panics_doc,
+	clippy::must_use_candidate,
+	clippy::too_many_lines,
 )]
+
+pub mod terminfo;
 
 pub trait Terminal: std::io::Write {
 	fn width(&self) -> std::io::Result<usize>;
@@ -102,44 +109,34 @@ forward_terminal_to_inner! {
 	impl<W> Terminal for RawMode<W> where W: std::os::unix::io::AsRawFd + Terminal
 }
 
-macro_rules! vt_mode {
-	(struct $ty:ident => $new:literal / $drop:literal) => {
-		pub struct $ty<W> where W: std::io::Write {
-			inner: W,
-		}
-
-		impl<W> $ty<W> where W: std::io::Write {
-			pub fn new(mut inner: W) -> std::io::Result<Self> {
-				std::io::Write::write_all(&mut inner, $new)?;
-				Ok($ty {
-					inner,
-				})
-			}
-		}
-
-		impl<W> Drop for $ty<W> where W: std::io::Write {
-			fn drop(&mut self) {
-				let _ = std::io::Write::write_all(&mut self.inner, $drop);
-				let _ = std::io::Write::flush(&mut self.inner);
-			}
-		}
-
-		forward_std_io_write_to_inner! {
-			impl<W> std::io::Write for $ty<W> where W: std::io::Write
-		}
-
-		forward_terminal_to_inner! {
-			impl<W> Terminal for $ty<W> where W: Terminal
-		}
-	};
+pub struct VtMode<W> where W: std::io::Write {
+	inner: W,
+	disable: Vec<u8>,
 }
 
-vt_mode! {
-	struct AlternateScreen => b"\x1B[?1049h" / b"\x1B[?1049l"
+impl<W> VtMode<W> where W: std::io::Write {
+	pub fn new(mut inner: W, (enable, disable): (&std::ffi::CStr, &std::ffi::CStr)) -> std::io::Result<Self> {
+		std::io::Write::write_all(&mut inner, enable.to_bytes())?;
+		Ok(VtMode {
+			inner,
+			disable: disable.to_bytes().to_owned(),
+		})
+	}
 }
 
-vt_mode! {
-	struct NoWraparound => b"\x1B[?7l" / b"\x1B[?7h"
+impl<W> Drop for VtMode<W> where W: std::io::Write {
+	fn drop(&mut self) {
+		let _ = std::io::Write::write_all(&mut self.inner, &self.disable);
+		let _ = std::io::Write::flush(&mut self.inner);
+	}
+}
+
+forward_std_io_write_to_inner! {
+	impl<W> std::io::Write for VtMode<W> where W: std::io::Write
+}
+
+forward_terminal_to_inner! {
+	impl<W> Terminal for VtMode<W> where W: Terminal
 }
 
 fn zero_or_errno(result: std::ffi::c_int) -> std::io::Result<()> {
