@@ -115,11 +115,11 @@ pub struct VtMode<W> where W: std::io::Write {
 }
 
 impl<W> VtMode<W> where W: std::io::Write {
-	pub fn new(mut inner: W, (enable, disable): (&std::ffi::CStr, &std::ffi::CStr)) -> std::io::Result<Self> {
-		std::io::Write::write_all(&mut inner, enable.to_bytes())?;
+	pub fn new(mut inner: W, (enable, disable): (&[u8], &[u8])) -> std::io::Result<Self> {
+		std::io::Write::write_all(&mut inner, enable)?;
 		Ok(VtMode {
 			inner,
-			disable: disable.to_bytes().to_owned(),
+			disable: disable.to_owned(),
 		})
 	}
 }

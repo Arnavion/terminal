@@ -11,6 +11,8 @@
 	clippy::indexing_slicing, // Ensure all indexing is fallible.
 )]
 
+pub mod parameterized;
+
 pub struct Terminfo {
 	terminal_names: String,
 
@@ -49,6 +51,7 @@ struct CachedCapabilities {
 	no_wraparound: CacheEntry<(TrustedRange<StringsTable>, TrustedRange<StringsTable>)>,
 	clear_screen: CacheEntry<TrustedRange<StringsTable>>,
 	clear_scrollback: CacheEntry<TrustedRange<ExtendedStringsTable>>,
+	sync: CacheEntry<(Vec<u8>, Vec<u8>)>,
 }
 
 #[derive(Debug)]
@@ -273,7 +276,7 @@ impl Terminfo {
 			extended_string_capabilities.iter()
 			.filter_map(|range| if let Capability::Value(range) = range { Some(range.0.end) } else { None })
 			.max()
-			.unwrap_or(0);
+			.map_or(Ok(Checked(0)), |end| Checked(end) + 1)?; // Ranges don't include the trailing \0, so add 1 to compensate.
 
 		let mut extended_capabilities_names = Vec::with_capacity(extended_capabilities_names_offsets.len());
 		for start in extended_capabilities_names_offsets {
@@ -309,11 +312,11 @@ impl Terminfo {
 		self.number_capabilities.iter().copied()
 	}
 
-	pub fn string_capabilities(&self) -> impl Iterator<Item = Capability<&std::ffi::CStr>> {
+	pub fn string_capabilities(&self) -> impl Iterator<Item = Capability<&[u8]>> {
 		self.string_capabilities.iter().map(|range| {
 			match range {
 				Capability::Value(range) => {
-					let s = self.strings_table.get_cstr(range.clone());
+					let s = self.strings_table.get_cstr_bytes(range.clone());
 					Capability::Value(s)
 				},
 				Capability::Absent => Capability::Absent,
@@ -322,28 +325,28 @@ impl Terminfo {
 		})
 	}
 
-	pub fn extended_boolean_capabilities(&self) -> impl Iterator<Item = (&std::ffi::CStr, bool)> {
+	pub fn extended_boolean_capabilities(&self) -> impl Iterator<Item = (&[u8], bool)> {
 		self.extended_boolean_capabilities.iter()
 			.map(|(name_range, value)| {
-				let name = self.extended_strings_table.get_cstr(name_range.clone());
+				let name = self.extended_strings_table.get_cstr_bytes(name_range.clone());
 				(name, *value)
 			})
 	}
 
-	pub fn extended_number_capabilities(&self) -> impl Iterator<Item = (&std::ffi::CStr, u32)> {
+	pub fn extended_number_capabilities(&self) -> impl Iterator<Item = (&[u8], u32)> {
 		self.extended_number_capabilities.iter()
 			.map(|(name_range, value)| {
-				let name = self.extended_strings_table.get_cstr(name_range.clone());
+				let name = self.extended_strings_table.get_cstr_bytes(name_range.clone());
 				(name, *value)
 			})
 	}
 
-	pub fn extended_string_capabilities(&self) -> impl Iterator<Item = (&std::ffi::CStr, Capability<&std::ffi::CStr>)> {
+	pub fn extended_string_capabilities(&self) -> impl Iterator<Item = (&[u8], Capability<&[u8]>)> {
 		self.extended_string_capabilities.iter()
 			.map(|(name_range, value_range)| {
-				let name = self.extended_strings_table.get_cstr(name_range.clone());
+				let name = self.extended_strings_table.get_cstr_bytes(name_range.clone());
 				let value = match value_range {
-					Capability::Value(value_range) => Capability::Value(self.extended_strings_table.get_cstr(value_range.clone())),
+					Capability::Value(value_range) => Capability::Value(self.extended_strings_table.get_cstr_bytes(value_range.clone())),
 					Capability::Absent => Capability::Absent,
 					Capability::Canceled => Capability::Canceled,
 				};
@@ -355,7 +358,7 @@ impl Terminfo {
 macro_rules! terminfo_caching_method_enable_disable {
 	($name:ident => [ $enable:literal, $disable:literal ]) => {
 		impl Terminfo {
-			pub fn $name(&mut self) -> (&std::ffi::CStr, &std::ffi::CStr) {
+			pub fn $name(&mut self) -> (&[u8], &[u8]) {
 				loop {
 					match &mut self.cached_capabilities.$name {
 						CacheEntry::Unknown => {
@@ -385,12 +388,12 @@ macro_rules! terminfo_caching_method_enable_disable {
 						},
 
 						CacheEntry::Present((enable_range, disable_range)) => {
-							let enable = self.strings_table.get_cstr(enable_range.clone());
-							let disable = self.strings_table.get_cstr(disable_range.clone());
+							let enable = self.strings_table.get_cstr_bytes(enable_range.clone());
+							let disable = self.strings_table.get_cstr_bytes(disable_range.clone());
 							break (enable, disable);
 						},
 
-						CacheEntry::Absent => break (EMPTY_CSTR, EMPTY_CSTR),
+						CacheEntry::Absent => break (b"", b""),
 					}
 				}
 			}
@@ -401,7 +404,7 @@ macro_rules! terminfo_caching_method_enable_disable {
 macro_rules! terminfo_caching_method_single {
 	($name:ident => [ $i:literal ]) => {
 		impl Terminfo {
-			pub fn $name(&mut self) -> &std::ffi::CStr {
+			pub fn $name(&mut self) -> &[u8] {
 				loop {
 					match &mut self.cached_capabilities.$name {
 						CacheEntry::Unknown => {
@@ -422,9 +425,9 @@ macro_rules! terminfo_caching_method_single {
 							}
 						},
 
-						CacheEntry::Present(range) => break self.strings_table.get_cstr(range.clone()),
+						CacheEntry::Present(range) => break self.strings_table.get_cstr_bytes(range.clone()),
 
-						CacheEntry::Absent => break EMPTY_CSTR,
+						CacheEntry::Absent => break b"",
 					}
 				}
 			}
@@ -435,13 +438,13 @@ macro_rules! terminfo_caching_method_single {
 macro_rules! terminfo_caching_method_extended_single {
 	($name:ident => [ $i:literal ]) => {
 		impl Terminfo {
-			pub fn $name(&mut self) -> &std::ffi::CStr {
+			pub fn $name(&mut self) -> &[u8] {
 				loop {
 					match &mut self.cached_capabilities.$name {
 						CacheEntry::Unknown => {
 							let range =
 								self.extended_string_capabilities.iter()
-								.find_map(|(name_range, value_range)| (self.extended_strings_table.get_cstr(name_range.clone()).to_bytes() == $i).then_some(value_range.clone()));
+								.find_map(|(name_range, value_range)| (self.extended_strings_table.get_cstr_bytes(name_range.clone()) == $i).then_some(value_range.clone()));
 
 							if let Some(Capability::Value(range)) = range {
 								self.cached_capabilities.$name = CacheEntry::Present(range);
@@ -451,9 +454,9 @@ macro_rules! terminfo_caching_method_extended_single {
 							}
 						},
 
-						CacheEntry::Present(range) => break self.extended_strings_table.get_cstr(range.clone()),
+						CacheEntry::Present(range) => break self.extended_strings_table.get_cstr_bytes(range.clone()),
 
-						CacheEntry::Absent => break EMPTY_CSTR,
+						CacheEntry::Absent => break b"",
 					}
 				}
 			}
@@ -467,6 +470,35 @@ terminfo_caching_method_enable_disable!(alternate_screen => [28, 40]);
 terminfo_caching_method_enable_disable!(no_wraparound => [152, 151]);
 terminfo_caching_method_single!(clear_screen => [5]);
 terminfo_caching_method_extended_single!(clear_scrollback => [b"E3"]);
+
+impl Terminfo {
+	pub fn sync(&mut self) -> Result<(&[u8], &[u8]), ParameterizedStringError> {
+		loop {
+			match self.cached_capabilities.sync {
+				CacheEntry::Unknown => {
+					let range =
+						self.extended_string_capabilities.iter()
+						.find_map(|(name_range, value_range)| (self.extended_strings_table.get_cstr_bytes(name_range.clone()) == b"Sync").then_some(value_range.clone()));
+
+					if let Some(Capability::Value(range)) = range {
+						let s = self.extended_strings_table.get_cstr_bytes(range.clone());
+						let expr = parameterized::parse(s).map_err(ParameterizedStringError::Parse)?;
+						let begin = parameterized::eval(&expr, &mut [1]).map_err(ParameterizedStringError::Eval)?;
+						let end = parameterized::eval(&expr, &mut [2]).map_err(ParameterizedStringError::Eval)?;
+						self.cached_capabilities.sync = CacheEntry::Present((begin, end));
+					}
+					else {
+						self.cached_capabilities.sync = CacheEntry::Absent;
+					}
+				},
+
+				CacheEntry::Present((ref begin, ref end)) => break Ok((begin, end)),
+
+				CacheEntry::Absent => break Ok((b"", b"")),
+			}
+		}
+	}
+}
 
 impl std::fmt::Debug for Terminfo {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -513,16 +545,14 @@ trait StringsStorage {
 	fn get_cstr_range(&self, start: Checked<usize>) -> Result<TrustedRange<Self>, ParseError> {
 		let s = self.get_from(start.0).ok_or(ParseError::StringOutOfBounds(start.0))?;
 		let s = from_bytes_until_nul(s)?;
-		let end = (start + s.to_bytes_with_nul().len())?;
+		let end = (start + s.to_bytes().len())?;
 		let range = TrustedRange((start.0)..(end.0), Default::default());
 		Ok(range)
 	}
 
-	fn get_cstr(&self, range: TrustedRange<Self>) -> &std::ffi::CStr {
+	fn get_cstr_bytes(&self, range: TrustedRange<Self>) -> &[u8] {
 		unsafe {
-			let s = self.get_unchecked(range.0);
-			let s = std::ffi::CStr::from_bytes_with_nul_unchecked(s);
-			s
+			self.get_unchecked(range.0)
 		}
 	}
 }
@@ -636,8 +666,6 @@ fn from_bytes_until_nul(s: &[u8]) -> Result<&std::ffi::CStr, ParseError> {
 		.ok_or(ParseError::MalformedString)
 }
 
-const EMPTY_CSTR: &std::ffi::CStr = unsafe { std::ffi::CStr::from_bytes_with_nul_unchecked(b"\0") };
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Checked<T>(T);
 
@@ -694,6 +722,12 @@ pub enum ParseError {
 	StringOutOfBounds(usize),
 	TerminalNameNotUtf8(std::ffi::IntoStringError),
 	UnknownVersion(i16),
+}
+
+#[derive(Debug)]
+pub enum ParameterizedStringError {
+	Eval(parameterized::EvalError),
+	Parse(parameterized::ParseError),
 }
 
 impl std::fmt::Display for FromEnvError {
@@ -776,8 +810,29 @@ impl std::error::Error for ParseError {
 	}
 }
 
+impl std::fmt::Display for ParameterizedStringError {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			ParameterizedStringError::Eval(inner) => write!(f, "parameterized string eval error: {inner}"),
+			ParameterizedStringError::Parse(inner) => write!(f, "parameterized string parse error: {inner}"),
+		}
+	}
+}
+
+impl std::error::Error for ParameterizedStringError {
+	fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+		#[allow(clippy::match_same_arms)]
+		match self {
+			ParameterizedStringError::Eval(inner) => inner.source(),
+			ParameterizedStringError::Parse(inner) => inner.source(),
+		}
+	}
+}
+
 #[cfg(test)]
 mod tests {
+	use super::{parameterized, Capability, Terminfo};
+
 	macro_rules! test_terms {
 		(@inner $terminfo:ident { $($tests:tt)* } { }) => {
 			$($tests)*
@@ -792,7 +847,7 @@ mod tests {
 
 					{
 						let value = $terminfo.$method_name();
-						assert_eq!(value, unsafe { std::ffi::CStr::from_bytes_with_nul_unchecked($value) });
+						assert_eq!(value.escape_ascii().to_string(), $value.escape_ascii().to_string());
 					}
 				}
 				{ $($rest)* }
@@ -808,8 +863,25 @@ mod tests {
 
 					{
 						let (enable, disable) = $terminfo.$method_name();
-						assert_eq!(enable, unsafe { std::ffi::CStr::from_bytes_with_nul_unchecked($enable) });
-						assert_eq!(disable, unsafe { std::ffi::CStr::from_bytes_with_nul_unchecked($disable) });
+						assert_eq!(enable.escape_ascii().to_string(), $enable.escape_ascii().to_string());
+						assert_eq!(disable.escape_ascii().to_string(), $disable.escape_ascii().to_string());
+					}
+				}
+				{ $($rest)* }
+			}
+		};
+
+		(@inner $terminfo:ident { $($tests:tt)* } { $method_name:ident .unwrap() = $enable:literal / $disable:literal , $($rest:tt)* }) => {
+			test_terms! {
+				@inner
+				$terminfo
+				{
+					$($tests)*
+
+					{
+						let (enable, disable) = $terminfo.$method_name().unwrap();
+						assert_eq!(enable.escape_ascii().to_string(), $enable.escape_ascii().to_string());
+						assert_eq!(disable.escape_ascii().to_string(), $disable.escape_ascii().to_string());
 					}
 				}
 				{ $($rest)* }
@@ -826,7 +898,7 @@ mod tests {
 			$(
 				#[test]
 				fn $test_name() {
-					let mut terminfo = super::Terminfo::from_term_name($term).unwrap();
+					let mut terminfo = Terminfo::from_term_name($term).unwrap();
 					println!("{terminfo:?}");
 
 					test_terms! {
@@ -841,45 +913,93 @@ mod tests {
 	}
 
 	test_terms! {
-		xterm("xterm") {
-			alternate_screen = b"\x1b[?1049h\x1b[22;0;0t\0" / b"\x1b[?1049l\x1b[23;0;0t\0",
-			no_wraparound = b"\x1b[?7l\0" / b"\x1b[?7h\0",
-			clear_screen = b"\x1b[H\x1b[2J\0",
-			clear_scrollback = b"\x1b[3J\0",
+		foot_extra("foot-extra") {
+			alternate_screen = b"\x1b[?1049h\x1b[22;0;0t" / b"\x1b[?1049l\x1b[23;0;0t",
+			no_wraparound = b"\x1b[?7l" / b"\x1b[?7h",
+			clear_screen = b"\x1b[H\x1b[2J",
+			clear_scrollback = b"\x1b[3J",
+			sync.unwrap() = b"\x1b[?2026h" / b"\x1b[?2026l",
 		}
 
 		ms_terminal("ms-terminal") {
-			alternate_screen = b"\x1b[?1049h\x1b[22;0;0t\0" / b"\x1b[?1049l\x1b[23;0;0t\0",
-			no_wraparound = b"\x1b[?7l\0" / b"\x1b[?7h\0",
-			clear_screen = b"\x1b[H\x1b[2J\0",
-			clear_scrollback = b"\x1b[3J\0",
+			alternate_screen = b"\x1b[?1049h\x1b[22;0;0t" / b"\x1b[?1049l\x1b[23;0;0t",
+			no_wraparound = b"\x1b[?7l" / b"\x1b[?7h",
+			clear_screen = b"\x1b[H\x1b[2J",
+			clear_scrollback = b"\x1b[3J",
+			sync.unwrap() = b"" / b"",
 		}
 
 		screen_putty_m1b("screen.putty-m1b") {
-			alternate_screen = b"\x1b[?1049h\0" / b"\x1b[?1049l\0",
-			no_wraparound = b"\0" / b"\0",
-			clear_screen = b"\x1b[H\x1b[J\0",
-			clear_scrollback = b"\0",
+			alternate_screen = b"\x1b[?1049h" / b"\x1b[?1049l",
+			no_wraparound = b"" / b"",
+			clear_screen = b"\x1b[H\x1b[J",
+			clear_scrollback = b"",
+			sync.unwrap() = b"" / b"",
 		}
 
 		st("st") {
-			alternate_screen = b"\x1b[?1049h\0" / b"\x1b[?1049l\0",
-			no_wraparound = b"\0" / b"\0",
-			clear_screen = b"\x1b[H\x1b[2J\0",
-			clear_scrollback = b"\0",
+			alternate_screen = b"\x1b[?1049h" / b"\x1b[?1049l",
+			no_wraparound = b"" / b"",
+			clear_screen = b"\x1b[H\x1b[2J",
+			clear_scrollback = b"",
+			sync.unwrap() = b"" / b"",
+		}
+
+		xterm("xterm") {
+			alternate_screen = b"\x1b[?1049h\x1b[22;0;0t" / b"\x1b[?1049l\x1b[23;0;0t",
+			no_wraparound = b"\x1b[?7l" / b"\x1b[?7h",
+			clear_screen = b"\x1b[H\x1b[2J",
+			clear_scrollback = b"\x1b[3J",
+			sync.unwrap() = b"" / b"",
 		}
 	}
 
 	#[test]
 	fn current_term() {
 		if std::env::var_os("TERM").is_some() {
-			let terminfo = super::Terminfo::from_env().unwrap();
+			let terminfo = Terminfo::from_env().unwrap();
 			println!("{terminfo:?}");
 		}
 	}
 
 	#[test]
 	fn all_terms() {
+		fn parse_parameterized_string(s: &[u8]) -> Option<parameterized::ParseError> {
+			if let Err(err) = parameterized::parse(s) {
+				#[allow(clippy::match_same_arms, clippy::unnested_or_patterns)]
+				match (err.expected, err.actual.as_deref()) {
+					// Not actually a tparm'able string
+					("integer", None) |
+					("printf kind", Some(r"\x0c")) |
+					("printf kind", Some(r"\r")) |
+					("printf kind", Some(r"\x0f")) |
+					("printf kind", Some(r"\x1b")) |
+					("printf kind", Some("$")) |
+					("printf kind", Some(",")) |
+					("printf kind", Some("E")) |
+					("printf kind", Some("k")) |
+					("printf kind", Some("n")) |
+					("printf kind", Some("w")) |
+					("printf kind", Some("y")) |
+					("printf kind", Some("z")) |
+					("printf kind", Some("[")) |
+					("printf kind", Some("}")) |
+					("valid % directive", None) |
+					(r#"b"%t""#, None) => None,
+
+					// TODO: char constant
+					("printf kind", Some(r"\'")) => None,
+
+					_ => Some(err),
+				}
+			}
+			else {
+				None
+			}
+		}
+
+		let mut errors = vec![];
+
 		let admin_entries = if let Ok(entries) = std::fs::read_dir("/etc/terminfo") { Some(entries) } else { None };
 		let distro_entries = if let Ok(entries) = std::fs::read_dir("/usr/share/terminfo") { Some(entries) } else { None };
 		let entries = admin_entries.into_iter().flatten().chain(distro_entries.into_iter().flatten());
@@ -900,10 +1020,40 @@ mod tests {
 
 				let f = if let Ok(f) = std::fs::File::open(entry.path()) { f } else { continue; };
 				let mut f = std::io::BufReader::new(f);
-				if let Err(err) = super::Terminfo::parse(&mut f) {
-					panic!("could not parse {}: {err}", entry.path().display());
+				let terminfo = match Terminfo::parse(&mut f) {
+					Ok(terminfo) => terminfo,
+					Err(err) => panic!("could not parse {}: {err}", entry.path().display()),
+				};
+
+				for value in terminfo.string_capabilities() {
+					if let Capability::Value(value) = value {
+						if let Some(err) = parse_parameterized_string(value) {
+							errors.push(format!(
+								"could not parse string capability of {} : {} : {err}",
+								entry.path().display(), value.escape_ascii(),
+							));
+						}
+					}
+				}
+
+				for (name, value) in terminfo.extended_string_capabilities() {
+					if let Capability::Value(value) = value {
+						if let Some(err) = parse_parameterized_string(value) {
+							errors.push(format!(
+								"could not parse string capability of {} : {} = {} : {err}",
+								entry.path().display(), name.escape_ascii(), value.escape_ascii(),
+							));
+						}
+					}
 				}
 			}
+		}
+
+		if !errors.is_empty() {
+			for error in errors {
+				eprintln!("{error}");
+			}
+			panic!("one or more errors");
 		}
 	}
 }
