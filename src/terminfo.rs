@@ -65,34 +65,51 @@ impl Terminfo {
 	}
 
 	pub fn from_term_name(term: impl AsRef<std::ffi::OsStr>) -> Result<Terminfo, FromTermNameError> {
+		// TODO: These depend on distro's configure options for ncurses. Make them compile-time options instead of hard-coding?
+		const TERMINFO: &[u8] = b"/usr/share/terminfo";
+		const TERMINFO_DIRS: &[u8] = b"/etc/terminfo:/usr/share/terminfo";
+
+		fn split_paths(paths: &std::ffi::OsStr) -> impl Iterator<Item = &std::path::Path> {
+			let paths = std::os::unix::ffi::OsStrExt::as_bytes(paths);
+			paths
+				.split(|&b| b == b':')
+				.map(|path| {
+					let path = if path.is_empty() { TERMINFO } else { path };
+					let path: &std::ffi::OsStr = std::os::unix::ffi::OsStrExt::from_bytes(path);
+					path.as_ref()
+				})
+		}
+
 		let term = term.as_ref();
 
-		let first_byte = match std::os::unix::ffi::OsStrExt::as_bytes(term) {
-			[first_byte, ..] => *first_byte,
-			[] => return Err(FromTermNameError::MalformedTermName),
-		};
-		let dir_name: &std::ffi::OsStr = std::os::unix::ffi::OsStrExt::from_bytes(std::slice::from_ref(&first_byte));
+		let first_byte = std::os::unix::ffi::OsStrExt::as_bytes(term).first().ok_or(FromTermNameError::MalformedTermName)?;
+		let dir_name: &std::ffi::OsStr = std::os::unix::ffi::OsStrExt::from_bytes(std::slice::from_ref(first_byte));
 
-		let (path, f) = {
-			// TODO: `infocmp -D` gives the actual paths. Make them compile-time options instead of hard-coding?
-			let user_terminfo_path = std::path::Path::new("/etc/terminfo");
-			let distro_terminfo_path = std::path::Path::new("/usr/share/terminfo");
+		let env_terminfo = std::env::var_os("TERMINFO");
+		let env_terminfo_dirs = std::env::var_os("TERMINFO_DIRS");
+		let home_terminfo = std::env::var_os("HOME").map(|home| {
+			let mut path = std::path::PathBuf::from(home);
+			path.push(".terminfo");
+			path
+		});
+		let mut search_paths =
+			env_terminfo.as_deref().into_iter().map(AsRef::as_ref)
+			.chain(home_terminfo.as_deref())
+			.chain(env_terminfo_dirs.as_deref().into_iter().flat_map(split_paths))
+			.chain(split_paths(std::os::unix::ffi::OsStrExt::from_bytes(TERMINFO_DIRS)))
+			.chain({
+				let path: &std::ffi::OsStr = std::os::unix::ffi::OsStrExt::from_bytes(TERMINFO);
+				std::iter::once(path.as_ref())
+			});
 
-			let mut term_path = user_terminfo_path.join(dir_name);
+		let (path, f) = loop {
+			let search_path = search_paths.next().ok_or(FromTermNameError::NoFileFound)?;
+			let mut term_path = search_path.join(dir_name);
 			term_path.push(term);
 
 			match std::fs::File::open(&term_path) {
-				Ok(f) => (term_path, f),
-
-				Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-					let mut term_path = distro_terminfo_path.join(dir_name);
-					term_path.push(term);
-					match std::fs::File::open(&term_path) {
-						Ok(f) => (term_path, f),
-						Err(err) => return Err(FromTermNameError::File { path: term_path, inner: err }),
-					}
-				},
-
+				Ok(f) => break (term_path, f),
+				Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
 				Err(err) => return Err(FromTermNameError::File { path: term_path, inner: err }),
 			}
 		};
@@ -583,7 +600,6 @@ fn read_boolean(f: &mut impl std::io::Read) -> Result<Capability<bool>, ParseErr
 	let mut result = [0_u8; std::mem::size_of::<u8>()];
 	f.read_exact(&mut result).map_err(ParseError::Io)?;
 	let result = u8::from_le_bytes(result);
-	#[allow(clippy::match_same_arms)]
 	match result {
 		0 => Ok(Capability::Value(false)),
 		1 => Ok(Capability::Value(true)),
@@ -659,6 +675,7 @@ pub enum FromEnvError {
 pub enum FromTermNameError {
 	File { path: std::path::PathBuf, inner: std::io::Error },
 	MalformedTermName,
+	NoFileFound,
 	Parse { path: std::path::PathBuf, inner: ParseError },
 }
 
@@ -702,6 +719,7 @@ impl std::fmt::Display for FromTermNameError {
 		match self {
 			FromTermNameError::File { path, inner } => write!(f, "could not open terminfo file {}: {inner}", path.display()),
 			FromTermNameError::MalformedTermName => f.write_str("term name is malformed"),
+			FromTermNameError::NoFileFound => f.write_str("no terminfo file found for given term name"),
 			FromTermNameError::Parse { path, inner } => write!(f, "could not parse terminfo file {}: {inner}", path.display()),
 		}
 	}
@@ -709,9 +727,11 @@ impl std::fmt::Display for FromTermNameError {
 
 impl std::error::Error for FromTermNameError {
 	fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+		#[allow(clippy::match_same_arms)]
 		match self {
 			FromTermNameError::File { path: _, inner } => inner.source(),
 			FromTermNameError::MalformedTermName => None,
+			FromTermNameError::NoFileFound => None,
 			FromTermNameError::Parse { path: _, inner } => inner.source(),
 		}
 	}
@@ -860,9 +880,9 @@ mod tests {
 
 	#[test]
 	fn all_terms() {
-		let user_entries = if let Ok(entries) = std::fs::read_dir("/etc/terminfo") { Some(entries) } else { None };
+		let admin_entries = if let Ok(entries) = std::fs::read_dir("/etc/terminfo") { Some(entries) } else { None };
 		let distro_entries = if let Ok(entries) = std::fs::read_dir("/usr/share/terminfo") { Some(entries) } else { None };
-		let entries = user_entries.into_iter().flatten().chain(distro_entries.into_iter().flatten());
+		let entries = admin_entries.into_iter().flatten().chain(distro_entries.into_iter().flatten());
 		for entry in entries {
 			let entry = if let Ok(entry) = entry { entry } else { continue; };
 			let is_dir = if let Ok(ft) = entry.file_type() { ft.is_dir() } else { false };
