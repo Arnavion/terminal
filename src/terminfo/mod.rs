@@ -11,6 +11,9 @@
 	clippy::indexing_slicing, // Ensure all indexing is fallible.
 )]
 
+mod known_overrides;
+pub use known_overrides::Overrides;
+
 pub mod parameterized;
 
 pub struct Terminfo {
@@ -27,6 +30,9 @@ pub struct Terminfo {
 	extended_strings_table: ExtendedStringsTable,
 
 	cached_capabilities: CachedCapabilities,
+
+	overridden_string_capabilities: std::collections::BTreeMap<usize, Capability<&'static [u8]>>,
+	overridden_extended_string_capabilities: std::collections::BTreeMap<&'static [u8], Capability<&'static [u8]>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -47,10 +53,10 @@ struct ExtendedStringsTable(Vec<u8>);
 
 #[derive(Default)]
 struct CachedCapabilities {
-	alternate_screen: CacheEntry<(TrustedRange<StringsTable>, TrustedRange<StringsTable>)>,
-	no_wraparound: CacheEntry<(TrustedRange<StringsTable>, TrustedRange<StringsTable>)>,
-	clear_screen: CacheEntry<TrustedRange<StringsTable>>,
-	clear_scrollback: CacheEntry<TrustedRange<ExtendedStringsTable>>,
+	alternate_screen: CacheEntry<(Vec<u8>, Vec<u8>)>,
+	no_wraparound: CacheEntry<(Vec<u8>, Vec<u8>)>,
+	clear_screen: CacheEntry<Vec<u8>>,
+	clear_scrollback: CacheEntry<Vec<u8>>,
 	sync: CacheEntry<(Vec<u8>, Vec<u8>)>,
 }
 
@@ -117,10 +123,10 @@ impl Terminfo {
 			}
 		};
 		let mut f = std::io::BufReader::new(f);
-		Self::parse(&mut f).map_err(|err| FromTermNameError::Parse { path, inner: err })
+		Self::parse(&mut f, known_overrides::KNOWN_OVERRIDES).map_err(|err| FromTermNameError::Parse { path, inner: err })
 	}
 
-	pub fn parse(f: &mut impl std::io::BufRead) -> Result<Terminfo, ParseError> {
+	pub fn parse(f: &mut impl std::io::BufRead, overrides: &[(&str, Overrides)]) -> Result<Terminfo, ParseError> {
 		let reader = Reader::new(f)?;
 
 		let terminal_names_num_bytes = Checked::<usize>(read_short(f)?.try_into().map_err(ParseError::IntegerOutOfRange)?);
@@ -191,6 +197,9 @@ impl Terminfo {
 			extended_strings_table: ExtendedStringsTable(vec![]),
 
 			cached_capabilities: Default::default(),
+
+			overridden_string_capabilities: Default::default(),
+			overridden_extended_string_capabilities: Default::default(),
 		};
 
 		// Undocumented detail: There is another even byte padding between strings table and extended header.
@@ -297,6 +306,17 @@ impl Terminfo {
 		result.extended_string_capabilities = extended_string_capabilities;
 		result.extended_strings_table = extended_strings_table;
 
+		let mut overridden_string_capabilities = std::mem::take(&mut result.overridden_string_capabilities);
+		let mut overridden_extended_string_capabilities = std::mem::take(&mut result.overridden_extended_string_capabilities);
+		for name in result.terminal_names() {
+			if let Some(overrides) = overrides.iter().find_map(|&(term, overrides)| (term == name).then_some(overrides)) {
+				overridden_string_capabilities.extend(overrides.string_capabilities.iter().copied());
+				overridden_extended_string_capabilities.extend(overrides.extended_string_capabilities.iter().copied());
+			}
+		}
+		result.overridden_string_capabilities = overridden_string_capabilities;
+		result.overridden_extended_string_capabilities = overridden_extended_string_capabilities;
+
 		Ok(result)
 	}
 
@@ -313,16 +333,12 @@ impl Terminfo {
 	}
 
 	pub fn string_capabilities(&self) -> impl Iterator<Item = Capability<&[u8]>> {
-		self.string_capabilities.iter().map(|range| {
-			match range {
-				Capability::Value(range) => {
-					let s = self.strings_table.get_cstr_bytes(range.clone());
-					Capability::Value(s)
-				},
-				Capability::Absent => Capability::Absent,
-				Capability::Canceled => Capability::Canceled,
-			}
-		})
+		self.string_capabilities.iter()
+			.enumerate()
+			.map(|(i, range)|
+				self.overridden_string_capabilities.get(&i).copied()
+				.unwrap_or_else(|| range.as_ref().map(|range| self.strings_table.get_cstr_bytes(range.clone())))
+			)
 	}
 
 	pub fn extended_boolean_capabilities(&self) -> impl Iterator<Item = (&[u8], bool)> {
@@ -345,13 +361,12 @@ impl Terminfo {
 		self.extended_string_capabilities.iter()
 			.map(|(name_range, value_range)| {
 				let name = self.extended_strings_table.get_cstr_bytes(name_range.clone());
-				let value = match value_range {
-					Capability::Value(value_range) => Capability::Value(self.extended_strings_table.get_cstr_bytes(value_range.clone())),
-					Capability::Absent => Capability::Absent,
-					Capability::Canceled => Capability::Canceled,
-				};
+				let value =
+					self.overridden_extended_string_capabilities.get(name).copied()
+					.unwrap_or_else(|| value_range.as_ref().map(|value_range| self.extended_strings_table.get_cstr_bytes(value_range.clone())));
 				(name, value)
 			})
+			.chain(self.overridden_extended_string_capabilities.iter().map(|(&name, &value)| (name, value)))
 	}
 }
 
@@ -360,36 +375,26 @@ macro_rules! terminfo_caching_method_enable_disable {
 		impl Terminfo {
 			pub fn $name(&mut self) -> (&[u8], &[u8]) {
 				loop {
-					match &mut self.cached_capabilities.$name {
+					match self.cached_capabilities.$name {
 						CacheEntry::Unknown => {
-							let enable_range =
-								self.string_capabilities.iter()
+							let enable =
+								self.string_capabilities()
 								.nth($enable)
-								.and_then(|range| match range {
-									Capability::Value(range) => Some(range),
-									Capability::Absent | Capability::Canceled => None,
-								})
-								.cloned();
-							let disable_range =
-								self.string_capabilities.iter()
+								.and_then(|value| value.into_option());
+							let disable =
+								self.string_capabilities()
 								.nth($disable)
-								.and_then(|range| match range {
-									Capability::Value(range) => Some(range),
-									Capability::Absent | Capability::Canceled => None,
-								})
-								.cloned();
+								.and_then(|value| value.into_option());
 
-							if let (Some(enable_range), Some(disable_range)) = (enable_range, disable_range) {
-								self.cached_capabilities.$name = CacheEntry::Present((enable_range, disable_range));
+							if let (Some(enable), Some(disable)) = (enable, disable) {
+								self.cached_capabilities.$name = CacheEntry::Present((enable.to_owned(), disable.to_owned()));
 							}
 							else {
 								self.cached_capabilities.$name = CacheEntry::Absent;
 							}
 						},
 
-						CacheEntry::Present((enable_range, disable_range)) => {
-							let enable = self.strings_table.get_cstr_bytes(enable_range.clone());
-							let disable = self.strings_table.get_cstr_bytes(disable_range.clone());
+						CacheEntry::Present((ref enable, ref disable)) => {
 							break (enable, disable);
 						},
 
@@ -406,26 +411,22 @@ macro_rules! terminfo_caching_method_single {
 		impl Terminfo {
 			pub fn $name(&mut self) -> &[u8] {
 				loop {
-					match &mut self.cached_capabilities.$name {
+					match self.cached_capabilities.$name {
 						CacheEntry::Unknown => {
-							let range =
-								self.string_capabilities.iter()
+							let value =
+								self.string_capabilities()
 								.nth($i)
-								.and_then(|range| match range {
-									Capability::Value(range) => Some(range),
-									Capability::Absent | Capability::Canceled => None,
-								})
-								.cloned();
+								.and_then(|value| value.into_option());
 
-							if let Some(range) = range {
-								self.cached_capabilities.$name = CacheEntry::Present(range);
+							if let Some(value) = value {
+								self.cached_capabilities.$name = CacheEntry::Present(value.to_owned());
 							}
 							else {
 								self.cached_capabilities.$name = CacheEntry::Absent;
 							}
 						},
 
-						CacheEntry::Present(range) => break self.strings_table.get_cstr_bytes(range.clone()),
+						CacheEntry::Present(ref value) => break value,
 
 						CacheEntry::Absent => break b"",
 					}
@@ -440,21 +441,21 @@ macro_rules! terminfo_caching_method_extended_single {
 		impl Terminfo {
 			pub fn $name(&mut self) -> &[u8] {
 				loop {
-					match &mut self.cached_capabilities.$name {
+					match self.cached_capabilities.$name {
 						CacheEntry::Unknown => {
-							let range =
-								self.extended_string_capabilities.iter()
-								.find_map(|(name_range, value_range)| (self.extended_strings_table.get_cstr_bytes(name_range.clone()) == $i).then_some(value_range.clone()));
+							let value =
+								self.extended_string_capabilities()
+								.find_map(|(name, value)| (name == $i).then_some(value));
 
-							if let Some(Capability::Value(range)) = range {
-								self.cached_capabilities.$name = CacheEntry::Present(range);
+							if let Some(Capability::Value(value)) = value {
+								self.cached_capabilities.$name = CacheEntry::Present(value.to_owned());
 							}
 							else {
 								self.cached_capabilities.$name = CacheEntry::Absent;
 							}
 						},
 
-						CacheEntry::Present(range) => break self.extended_strings_table.get_cstr_bytes(range.clone()),
+						CacheEntry::Present(ref value) => break value,
 
 						CacheEntry::Absent => break b"",
 					}
@@ -476,13 +477,12 @@ impl Terminfo {
 		loop {
 			match self.cached_capabilities.sync {
 				CacheEntry::Unknown => {
-					let range =
-						self.extended_string_capabilities.iter()
-						.find_map(|(name_range, value_range)| (self.extended_strings_table.get_cstr_bytes(name_range.clone()) == b"Sync").then_some(value_range.clone()));
+					let value =
+						self.extended_string_capabilities()
+						.find_map(|(name, value)| (name == b"Sync").then_some(value));
 
-					if let Some(Capability::Value(range)) = range {
-						let s = self.extended_strings_table.get_cstr_bytes(range.clone());
-						let expr = parameterized::parse(s).map_err(ParameterizedStringError::Parse)?;
+					if let Some(Capability::Value(value)) = value {
+						let expr = parameterized::parse(value).map_err(ParameterizedStringError::Parse)?;
 						let begin = parameterized::eval(&expr, &mut [1]).map_err(ParameterizedStringError::Eval)?;
 						let end = parameterized::eval(&expr, &mut [2]).map_err(ParameterizedStringError::Eval)?;
 						self.cached_capabilities.sync = CacheEntry::Present((begin, end));
@@ -507,11 +507,36 @@ impl std::fmt::Debug for Terminfo {
 			.field("terminal_names", &self.terminal_names().collect::<Vec<_>>())
 			.field("boolean_capabilities", &self.boolean_capabilities)
 			.field("number_capabilities", &self.number_capabilities)
-			.field("string_capabilities", &self.string_capabilities().collect::<Vec<_>>())
-			.field("extended_boolean_capabilities", &self.extended_boolean_capabilities().collect::<Vec<_>>())
-			.field("extended_number_capabilities", &self.extended_number_capabilities().collect::<Vec<_>>())
-			.field("extended_string_capabilities", &self.extended_string_capabilities().collect::<Vec<_>>())
+			.field("string_capabilities", &self.string_capabilities().map(|value| value.map(std::ffi::CString::new)).collect::<Vec<_>>())
+			.field("extended_boolean_capabilities", &self.extended_boolean_capabilities().map(|(name, value)| (std::ffi::CString::new(name), value)).collect::<Vec<_>>())
+			.field("extended_number_capabilities", &self.extended_number_capabilities().map(|(name, value)| (std::ffi::CString::new(name), value)).collect::<Vec<_>>())
+			.field("extended_string_capabilities", &self.extended_string_capabilities().map(|(name, value)| (std::ffi::CString::new(name), value.map(std::ffi::CString::new))).collect::<Vec<_>>())
 			.finish_non_exhaustive()
+	}
+}
+
+impl<T> Capability<T> {
+	pub fn as_ref(&self) -> Capability<&T> {
+		match self {
+			Capability::Value(t) => Capability::Value(t),
+			Capability::Absent => Capability::Absent,
+			Capability::Canceled => Capability::Canceled,
+		}
+	}
+
+	pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Capability<U> {
+		match self {
+			Capability::Value(t) => Capability::Value(f(t)),
+			Capability::Absent => Capability::Absent,
+			Capability::Canceled => Capability::Canceled,
+		}
+	}
+
+	pub fn into_option(self) -> Option<T> {
+		match self {
+			Capability::Value(t) => Some(t),
+			Capability::Absent | Capability::Canceled => None,
+		}
 	}
 }
 
@@ -831,7 +856,7 @@ impl std::error::Error for ParameterizedStringError {
 
 #[cfg(test)]
 mod tests {
-	use super::{parameterized, Capability, Terminfo};
+	use super::{known_overrides, parameterized, Capability, Terminfo};
 
 	macro_rules! test_terms {
 		(@inner $terminfo:ident { $($tests:tt)* } { }) => {
@@ -945,6 +970,14 @@ mod tests {
 			sync.unwrap() = b"" / b"",
 		}
 
+		tmux_256color("tmux-256color") {
+			alternate_screen = b"\x1b[?1049h" / b"\x1b[?1049l",
+			no_wraparound = b"\x1b[?7l" / b"\x1b[?7h",
+			clear_screen = b"\x1b[H\x1b[J",
+			clear_scrollback = b"\x1b[3J",
+			sync.unwrap() = b"" / b"",
+		}
+
 		xterm("xterm") {
 			alternate_screen = b"\x1b[?1049h\x1b[22;0;0t" / b"\x1b[?1049l\x1b[23;0;0t",
 			no_wraparound = b"\x1b[?7l" / b"\x1b[?7h",
@@ -1020,7 +1053,7 @@ mod tests {
 
 				let f = if let Ok(f) = std::fs::File::open(entry.path()) { f } else { continue; };
 				let mut f = std::io::BufReader::new(f);
-				let terminfo = match Terminfo::parse(&mut f) {
+				let terminfo = match Terminfo::parse(&mut f, known_overrides::KNOWN_OVERRIDES) {
 					Ok(terminfo) => terminfo,
 					Err(err) => panic!("could not parse {}: {err}", entry.path().display()),
 				};
