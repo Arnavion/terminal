@@ -54,9 +54,11 @@ struct ExtendedStringsTable(Vec<u8>);
 #[derive(Default)]
 struct CachedCapabilities {
 	alternate_screen: CacheEntry<(Vec<u8>, Vec<u8>)>,
-	no_wraparound: CacheEntry<(Vec<u8>, Vec<u8>)>,
+	clear_line: CacheEntry<Vec<u8>>,
 	clear_screen: CacheEntry<Vec<u8>>,
 	clear_scrollback: CacheEntry<Vec<u8>>,
+	move_cursor: CacheEntry<Vec<parameterized::Expr>>,
+	no_wraparound: CacheEntry<(Vec<u8>, Vec<u8>)>,
 	sync: CacheEntry<(Vec<u8>, Vec<u8>)>,
 }
 
@@ -377,16 +379,10 @@ macro_rules! terminfo_caching_method_enable_disable {
 				loop {
 					match self.cached_capabilities.$name {
 						CacheEntry::Unknown => {
-							let enable =
-								self.string_capabilities()
-								.nth($enable)
-								.and_then(|value| value.into_option());
-							let disable =
-								self.string_capabilities()
-								.nth($disable)
-								.and_then(|value| value.into_option());
+							let enable = self.string_capabilities().nth($enable);
+							let disable = self.string_capabilities().nth($disable);
 
-							if let (Some(enable), Some(disable)) = (enable, disable) {
+							if let (Some(Capability::Value(enable)), Some(Capability::Value(disable))) = (enable, disable) {
 								self.cached_capabilities.$name = CacheEntry::Present((enable.to_owned(), disable.to_owned()));
 							}
 							else {
@@ -413,12 +409,9 @@ macro_rules! terminfo_caching_method_single {
 				loop {
 					match self.cached_capabilities.$name {
 						CacheEntry::Unknown => {
-							let value =
-								self.string_capabilities()
-								.nth($i)
-								.and_then(|value| value.into_option());
+							let value = self.string_capabilities().nth($i);
 
-							if let Some(value) = value {
+							if let Some(Capability::Value(value)) = value {
 								self.cached_capabilities.$name = CacheEntry::Present(value.to_owned());
 							}
 							else {
@@ -468,9 +461,37 @@ macro_rules! terminfo_caching_method_extended_single {
 // TODO: Parse indices from term.h instead of hard-coding? But that requires ncurses-devel to be installed.
 // Hard-coded values are correct for Linux anyway.
 terminfo_caching_method_enable_disable!(alternate_screen => [28, 40]);
-terminfo_caching_method_enable_disable!(no_wraparound => [152, 151]);
+terminfo_caching_method_single!(clear_line => [6]);
 terminfo_caching_method_single!(clear_screen => [5]);
 terminfo_caching_method_extended_single!(clear_scrollback => [b"E3"]);
+terminfo_caching_method_enable_disable!(no_wraparound => [152, 151]);
+
+impl Terminfo {
+	pub fn move_cursor(&mut self, row: i32, col: i32, out: &mut Vec<u8>) -> Result<(), ParameterizedStringError> {
+		loop {
+			match self.cached_capabilities.move_cursor {
+				CacheEntry::Unknown => {
+					let value = self.string_capabilities().nth(10);
+
+					if let Some(Capability::Value(value)) = value {
+						let expr = parameterized::parse(value).map_err(ParameterizedStringError::Parse)?;
+						self.cached_capabilities.move_cursor = CacheEntry::Present(expr);
+					}
+					else {
+						self.cached_capabilities.move_cursor = CacheEntry::Absent;
+					}
+				},
+
+				CacheEntry::Present(ref expr) => {
+					parameterized::eval(expr, &mut [row, col], out).map_err(ParameterizedStringError::Eval)?;
+					break Ok(());
+				},
+
+				CacheEntry::Absent => break Ok(()),
+			}
+		}
+	}
+}
 
 impl Terminfo {
 	pub fn sync(&mut self) -> Result<(&[u8], &[u8]), ParameterizedStringError> {
@@ -483,8 +504,10 @@ impl Terminfo {
 
 					if let Some(Capability::Value(value)) = value {
 						let expr = parameterized::parse(value).map_err(ParameterizedStringError::Parse)?;
-						let begin = parameterized::eval(&expr, &mut [1]).map_err(ParameterizedStringError::Eval)?;
-						let end = parameterized::eval(&expr, &mut [2]).map_err(ParameterizedStringError::Eval)?;
+						let mut begin = vec![];
+						parameterized::eval(&expr, &mut [1], &mut begin).map_err(ParameterizedStringError::Eval)?;
+						let mut end = vec![];
+						parameterized::eval(&expr, &mut [2], &mut end).map_err(ParameterizedStringError::Eval)?;
 						self.cached_capabilities.sync = CacheEntry::Present((begin, end));
 					}
 					else {
@@ -529,13 +552,6 @@ impl<T> Capability<T> {
 			Capability::Value(t) => Capability::Value(f(t)),
 			Capability::Absent => Capability::Absent,
 			Capability::Canceled => Capability::Canceled,
-		}
-	}
-
-	pub fn into_option(self) -> Option<T> {
-		match self {
-			Capability::Value(t) => Some(t),
-			Capability::Absent | Capability::Canceled => None,
 		}
 	}
 }
@@ -863,7 +879,7 @@ mod tests {
 			$($tests)*
 		};
 
-		(@inner $terminfo:ident { $($tests:tt)* } { $method_name:ident = $value:literal , $($rest:tt)* }) => {
+		(@inner $terminfo:ident { $($tests:tt)* } { $method_name:ident ( $($params:tt)* ) $(.$unwrap:ident())? => $value:literal , $($rest:tt)* }) => {
 			test_terms! {
 				@inner
 				$terminfo
@@ -871,7 +887,8 @@ mod tests {
 					$($tests)*
 
 					{
-						let value = $terminfo.$method_name();
+						let mut value = vec![];
+						$terminfo.$method_name($($params)*, &mut value)$(.$unwrap())?;
 						assert_eq!(value.escape_ascii().to_string(), $value.escape_ascii().to_string());
 					}
 				}
@@ -879,7 +896,7 @@ mod tests {
 			}
 		};
 
-		(@inner $terminfo:ident { $($tests:tt)* } { $method_name:ident = $enable:literal / $disable:literal , $($rest:tt)* }) => {
+		(@inner $terminfo:ident { $($tests:tt)* } { $method_name:ident ( $($params:tt)* ) $(.$unwrap:ident())? = $value:literal , $($rest:tt)* }) => {
 			test_terms! {
 				@inner
 				$terminfo
@@ -887,16 +904,15 @@ mod tests {
 					$($tests)*
 
 					{
-						let (enable, disable) = $terminfo.$method_name();
-						assert_eq!(enable.escape_ascii().to_string(), $enable.escape_ascii().to_string());
-						assert_eq!(disable.escape_ascii().to_string(), $disable.escape_ascii().to_string());
+						let value = $terminfo.$method_name($($params)*)$(.$unwrap())?;
+						assert_eq!(value.escape_ascii().to_string(), $value.escape_ascii().to_string());
 					}
 				}
 				{ $($rest)* }
 			}
 		};
 
-		(@inner $terminfo:ident { $($tests:tt)* } { $method_name:ident .unwrap() = $enable:literal / $disable:literal , $($rest:tt)* }) => {
+		(@inner $terminfo:ident { $($tests:tt)* } { $method_name:ident ( $($params:tt)* ) $(.$unwrap:ident())? = $enable:literal / $disable:literal , $($rest:tt)* }) => {
 			test_terms! {
 				@inner
 				$terminfo
@@ -904,7 +920,7 @@ mod tests {
 					$($tests)*
 
 					{
-						let (enable, disable) = $terminfo.$method_name().unwrap();
+						let (enable, disable) = $terminfo.$method_name($($params:tt)*)$(.$unwrap())?;
 						assert_eq!(enable.escape_ascii().to_string(), $enable.escape_ascii().to_string());
 						assert_eq!(disable.escape_ascii().to_string(), $disable.escape_ascii().to_string());
 					}
@@ -939,51 +955,63 @@ mod tests {
 
 	test_terms! {
 		foot_extra("foot-extra") {
-			alternate_screen = b"\x1b[?1049h\x1b[22;0;0t" / b"\x1b[?1049l\x1b[23;0;0t",
-			no_wraparound = b"\x1b[?7l" / b"\x1b[?7h",
-			clear_screen = b"\x1b[H\x1b[2J",
-			clear_scrollback = b"\x1b[3J",
-			sync.unwrap() = b"\x1b[?2026h" / b"\x1b[?2026l",
+			alternate_screen() = b"\x1b[?1049h\x1b[22;0;0t" / b"\x1b[?1049l\x1b[23;0;0t",
+			clear_line() = b"\x1b[K",
+			clear_screen() = b"\x1b[H\x1b[2J",
+			clear_scrollback() = b"\x1b[3J",
+			move_cursor(2, 0).unwrap() => b"\x1b[3;1H",
+			no_wraparound() = b"\x1b[?7l" / b"\x1b[?7h",
+			sync().unwrap() = b"\x1b[?2026h" / b"\x1b[?2026l",
 		}
 
 		ms_terminal("ms-terminal") {
-			alternate_screen = b"\x1b[?1049h\x1b[22;0;0t" / b"\x1b[?1049l\x1b[23;0;0t",
-			no_wraparound = b"\x1b[?7l" / b"\x1b[?7h",
-			clear_screen = b"\x1b[H\x1b[2J",
-			clear_scrollback = b"\x1b[3J",
-			sync.unwrap() = b"" / b"",
+			alternate_screen() = b"\x1b[?1049h\x1b[22;0;0t" / b"\x1b[?1049l\x1b[23;0;0t",
+			clear_line() = b"\x1b[K",
+			clear_screen() = b"\x1b[H\x1b[2J",
+			clear_scrollback() = b"\x1b[3J",
+			move_cursor(2, 0).unwrap() => b"\x1b[3;1H",
+			no_wraparound() = b"\x1b[?7l" / b"\x1b[?7h",
+			sync().unwrap() = b"" / b"",
 		}
 
 		screen_putty_m1b("screen.putty-m1b") {
-			alternate_screen = b"\x1b[?1049h" / b"\x1b[?1049l",
-			no_wraparound = b"" / b"",
-			clear_screen = b"\x1b[H\x1b[J",
-			clear_scrollback = b"",
-			sync.unwrap() = b"" / b"",
+			alternate_screen() = b"\x1b[?1049h" / b"\x1b[?1049l",
+			clear_line() = b"\x1b[K",
+			clear_screen() = b"\x1b[H\x1b[J",
+			clear_scrollback() = b"",
+			move_cursor(2, 0).unwrap() => b"\x1b[3;1H",
+			no_wraparound() = b"" / b"",
+			sync().unwrap() = b"" / b"",
 		}
 
 		st("st") {
-			alternate_screen = b"\x1b[?1049h" / b"\x1b[?1049l",
-			no_wraparound = b"" / b"",
-			clear_screen = b"\x1b[H\x1b[2J",
-			clear_scrollback = b"",
-			sync.unwrap() = b"" / b"",
+			alternate_screen() = b"\x1b[?1049h" / b"\x1b[?1049l",
+			clear_line() = b"\x1b[K",
+			clear_screen() = b"\x1b[H\x1b[2J",
+			clear_scrollback() = b"",
+			move_cursor(2, 0).unwrap() => b"\x1b[3;1H",
+			no_wraparound() = b"" / b"",
+			sync().unwrap() = b"" / b"",
 		}
 
 		tmux_256color("tmux-256color") {
-			alternate_screen = b"\x1b[?1049h" / b"\x1b[?1049l",
-			no_wraparound = b"\x1b[?7l" / b"\x1b[?7h",
-			clear_screen = b"\x1b[H\x1b[J",
-			clear_scrollback = b"\x1b[3J",
-			sync.unwrap() = b"" / b"",
+			alternate_screen() = b"\x1b[?1049h" / b"\x1b[?1049l",
+			clear_line() = b"\x1b[K",
+			clear_screen() = b"\x1b[H\x1b[J",
+			clear_scrollback() = b"\x1b[3J",
+			move_cursor(2, 0).unwrap() => b"\x1b[3;1H",
+			no_wraparound() = b"\x1b[?7l" / b"\x1b[?7h",
+			sync().unwrap() = b"" / b"",
 		}
 
 		xterm("xterm") {
-			alternate_screen = b"\x1b[?1049h\x1b[22;0;0t" / b"\x1b[?1049l\x1b[23;0;0t",
-			no_wraparound = b"\x1b[?7l" / b"\x1b[?7h",
-			clear_screen = b"\x1b[H\x1b[2J",
-			clear_scrollback = b"\x1b[3J",
-			sync.unwrap() = b"" / b"",
+			alternate_screen() = b"\x1b[?1049h\x1b[22;0;0t" / b"\x1b[?1049l\x1b[23;0;0t",
+			clear_line() = b"\x1b[K",
+			clear_screen() = b"\x1b[H\x1b[2J",
+			clear_scrollback() = b"\x1b[3J",
+			move_cursor(2, 0).unwrap() => b"\x1b[3;1H",
+			no_wraparound() = b"\x1b[?7l" / b"\x1b[?7h",
+			sync().unwrap() = b"" / b"",
 		}
 	}
 

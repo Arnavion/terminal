@@ -104,8 +104,12 @@ mod tests {
 			),
 		]);
 
-		assert_eq!(eval(&expr, &mut [1]).unwrap(), b"\x1b[?2026h");
-		assert_eq!(eval(&expr, &mut [2]).unwrap(), b"\x1b[?2026l");
+		let mut s = vec![];
+		eval(&expr, &mut [1], &mut s).unwrap();
+		assert_eq!(s, b"\x1b[?2026h");
+		let mut s = vec![];
+		eval(&expr, &mut [2], &mut s).unwrap();
+		assert_eq!(s, b"\x1b[?2026l");
 	}
 
 	// From Eterm-256color

@@ -5,11 +5,9 @@ use super::{Cmp, Expr, Math, PrintfFlagLeft, PrintfFlagSign, PrintfKind};
 // TODO:
 // - params and stack can be either integers or strings.
 // - static and dynamic params.
-pub fn eval(expr: &[Expr], params: &mut [i32]) -> Result<Vec<u8>, EvalError> {
-	let mut result = vec![];
+pub fn eval(expr: &[Expr], params: &mut [i32], result: &mut Vec<u8>) -> Result<(), EvalError> {
 	let mut stack = vec![];
-	eval_inner(expr, params, &mut stack, &mut result)?;
-	Ok(result)
+	eval_inner(expr, params, &mut stack, result)
 }
 
 fn eval_inner(expr: &[Expr], params: &mut [i32], stack: &mut Vec<i32>, result: &mut Vec<u8>) -> Result<(), EvalError> {
