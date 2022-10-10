@@ -130,15 +130,15 @@ fn eval_inner(expr: &[Expr], params: &mut [i32], stack: &mut Vec<i32>, result: &
 					},
 
 					PrintfKind::Decimal => {
-						write!(result, "{}", value).unwrap();
+						write!(result, "{value}").unwrap();
 					},
 
 					PrintfKind::LowerHex => {
-						write!(result, "{:x}", value).unwrap();
+						write!(result, "{value:x}").unwrap();
 					},
 
 					PrintfKind::Octal => {
-						write!(result, "{:o}", value).unwrap();
+						write!(result, "{value:o}").unwrap();
 					},
 
 					PrintfKind::String => {
@@ -146,7 +146,7 @@ fn eval_inner(expr: &[Expr], params: &mut [i32], stack: &mut Vec<i32>, result: &
 					},
 
 					PrintfKind::UpperHex => {
-						write!(result, "{:X}", value).unwrap();
+						write!(result, "{value:X}").unwrap();
 					},
 				}
 			},

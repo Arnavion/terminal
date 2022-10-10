@@ -584,6 +584,7 @@ trait StringsStorage {
 	unsafe fn get_unchecked(&self, range: std::ops::Range<usize>) -> &[u8];
 
 	fn get_cstr_range(&self, start: Checked<usize>) -> Result<TrustedRange<Self>, ParseError> {
+		#[allow(clippy::or_fun_call)] // TODO: https://github.com/rust-lang/rust-clippy/issues/9608
 		let s = self.get_from(start.0).ok_or(ParseError::StringOutOfBounds(start.0))?;
 		let s = from_bytes_until_nul(s)?;
 		let end = (start + s.to_bytes().len())?;
