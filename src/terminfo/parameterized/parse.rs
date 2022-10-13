@@ -151,7 +151,7 @@ fn parse_integer(rest: &mut &[u8]) -> Result<i32, ParseError> {
 	}
 
 	// TODO: Use split_at_unchecked when that is stabilized
-	let (s, rest_) = rest.split_at(end);
+	let (s, rest_) = unsafe { (rest.get_unchecked(..end), rest.get_unchecked(end..)) };
 	*rest = rest_;
 
 	if !split_start(rest, b"}") {
@@ -233,7 +233,7 @@ fn parse_printf(rest: &mut &[u8]) -> Result<Expr, ParseError> {
 		}
 
 		// TODO: Use split_at_unchecked when that is stabilized
-		let (s, rest_) = rest.split_at(end);
+		let (s, rest_) = unsafe { (rest.get_unchecked(..end), rest.get_unchecked(end..)) };
 		*rest = rest_;
 
 		let width =
@@ -258,7 +258,7 @@ fn parse_printf(rest: &mut &[u8]) -> Result<Expr, ParseError> {
 			}
 
 			// TODO: Use split_at_unchecked when that is stabilized
-			let (s, rest_) = rest.split_at(end);
+			let (s, rest_) = unsafe { (rest.get_unchecked(..end), rest.get_unchecked(end..)) };
 			*rest = rest_;
 
 			let precision =
