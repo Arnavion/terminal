@@ -1032,6 +1032,7 @@ mod tests {
 				match (err.expected, err.actual.as_deref()) {
 					// Not actually a tparm'able string
 					("integer", None) |
+					("printf flags or width or kind", None) |
 					("printf kind", Some(r"\x0c")) |
 					("printf kind", Some(r"\r")) |
 					("printf kind", Some(r"\x0f")) |
@@ -1046,7 +1047,6 @@ mod tests {
 					("printf kind", Some("z")) |
 					("printf kind", Some("[")) |
 					("printf kind", Some("}")) |
-					("valid % directive", None) |
 					(r#"b"%t""#, None) => None,
 
 					// TODO: char constant

@@ -63,7 +63,7 @@ fn parse_percent(rest: &mut &[u8]) -> Result<Expr, ParseError> {
 
 			let cond = parse_expr_until(rest, &[b"%t"])?;
 			if !split_start(rest, b"%t") {
-				return Err(ParseError { expected: r#"b"%t""#, actual: rest.first().map(|b| b.escape_ascii().to_string()), pos: None });
+				return Err((r#"b"%t""#, rest.first()).into());
 			}
 
 			parse_if(rest, cond)
@@ -77,7 +77,7 @@ fn parse_percent(rest: &mut &[u8]) -> Result<Expr, ParseError> {
 			*rest = rest_;
 			match split_first(rest) {
 				Some(b @ (b'A'..=b'Z' | b'a'..=b'z')) => Ok(Expr::StoreVariable(b)),
-				b => Err(ParseError { expected: "valid % directive", actual: b.map(|b| b.escape_ascii().to_string()), pos: None }),
+				b => Err(("valid % directive", b).into()),
 			}
 		},
 
@@ -100,7 +100,7 @@ fn parse_percent(rest: &mut &[u8]) -> Result<Expr, ParseError> {
 			*rest = rest_;
 			match split_first(rest) {
 				Some(b @ (b'A'..=b'Z' | b'a'..=b'z')) => Ok(Expr::LoadVariable(b)),
-				b => Err(ParseError { expected: "valid % directive", actual: b.map(|b| b.escape_ascii().to_string()), pos: None }),
+				b => Err(("valid % directive", b).into()),
 			}
 		},
 
@@ -126,16 +126,14 @@ fn parse_percent(rest: &mut &[u8]) -> Result<Expr, ParseError> {
 
 		Some((b'~', rest_)) => { *rest = rest_; Ok(Expr::Math(Math::BitNot)) },
 
-		Some(_) => parse_printf(rest),
-
-		None => Err(ParseError { expected: "valid % directive", actual: None, pos: None }),
+		_ => parse_printf(rest),
 	}
 }
 
 fn parse_param_num(rest: &mut &[u8]) -> Result<usize, ParseError> {
 	match split_first(rest) {
 		Some(b @ b'1'..=b'9') => Ok((b - b'1').into()),
-		b => Err(ParseError { expected: "b'1'..=b'9'", actual: b.map(|b| b.escape_ascii().to_string()), pos: None }),
+		b => Err(("b'1'..=b'9'", b).into()),
 	}
 }
 
@@ -149,7 +147,7 @@ fn parse_integer(rest: &mut &[u8]) -> Result<i32, ParseError> {
 		end += 1;
 	}
 	if end == 0 {
-		return Err(ParseError { expected: "integer", actual: rest.first().map(|b| b.escape_ascii().to_string()), pos: None });
+		return Err(("integer", rest.first()).into());
 	}
 
 	// TODO: Use split_at_unchecked when that is stabilized
@@ -157,14 +155,14 @@ fn parse_integer(rest: &mut &[u8]) -> Result<i32, ParseError> {
 	*rest = rest_;
 
 	if !split_start(rest, b"}") {
-		return Err(ParseError { expected: "b'}'", actual: rest.get(end).map(|b| b.escape_ascii().to_string()), pos: None });
+		return Err(("b'}'", rest.get(end)).into());
 	}
 
 	let i =
 		std::str::from_utf8(s)
-		.map_err(|_| ParseError { expected: "integer", actual: Some(s.escape_ascii().to_string()), pos: None })?
+		.map_err(|_| ("integer", Some(s)))?
 		.parse()
-		.map_err(|_| ParseError { expected: "integer", actual: Some(s.escape_ascii().to_string()), pos: None })?;
+		.map_err(|_| ("integer", Some(s)))?;
 	Ok(i)
 }
 
@@ -186,7 +184,7 @@ fn parse_if(rest: &mut &[u8], cond: Vec<Expr>) -> Result<Expr, ParseError> {
 				e
 			}
 			else {
-				return Err(ParseError { expected: r#"b"%t" | b"%;""#, actual: rest.first().map(|b| b.escape_ascii().to_string()), pos: None });
+				return Err((r#"b"%t" | b"%;""#, rest.first()).into());
 			}
 		}
 		else if split_start(rest, b"%;") {
@@ -197,7 +195,7 @@ fn parse_if(rest: &mut &[u8], cond: Vec<Expr>) -> Result<Expr, ParseError> {
 			vec![]
 		}
 		else {
-			return Err(ParseError { expected: r#"b"%e" | b"%;""#, actual: rest.first().map(|b| b.escape_ascii().to_string()), pos: None });
+			return Err((r#"b"%e" | b"%;""#, rest.first()).into());
 		};
 	Ok(Expr::If(cond, t, e))
 }
@@ -211,7 +209,7 @@ fn parse_printf(rest: &mut &[u8]) -> Result<Expr, ParseError> {
 		sign: PrintfFlagSign::Default,
 	};
 	loop {
-		match rest.split_first().ok_or(ParseError { expected: "printf flags or width or kind", actual: None, pos: None })? {
+		match rest.split_first().ok_or(("printf flags or width or kind", None::<u8>))? {
 			(b' ', rest_) => { *rest = rest_; flags.sign = PrintfFlagSign::Space; },
 			(b'#', rest_) => { *rest = rest_; flags.alternate_form = true; },
 			(b'+', rest_) => { *rest = rest_; flags.sign = PrintfFlagSign::Plus; },
@@ -223,7 +221,7 @@ fn parse_printf(rest: &mut &[u8]) -> Result<Expr, ParseError> {
 
 	let mut width_and_precision = None;
 
-	if let b'1'..=b'9' = rest.first().ok_or(ParseError { expected: "printf width or kind", actual: None, pos: None })? {
+	if let b'1'..=b'9' = rest.first().ok_or(("printf width or kind", None::<u8>))? {
 		let mut end = 0;
 		for &b in *rest {
 			if let b'0'..=b'9' = b {
@@ -240,9 +238,9 @@ fn parse_printf(rest: &mut &[u8]) -> Result<Expr, ParseError> {
 
 		let width =
 			std::str::from_utf8(s)
-			.map_err(|_| ParseError { expected: "printf width", actual: Some(s.escape_ascii().to_string()), pos: None })?
+			.map_err(|_| ("printf width", Some(s)))?
 			.parse()
-			.map_err(|_| ParseError { expected: "printf width", actual: Some(s.escape_ascii().to_string()), pos: None })?;
+			.map_err(|_| ("printf width", Some(s)))?;
 
 		if split_start(rest, b".") {
 			let mut end = 0;
@@ -256,7 +254,7 @@ fn parse_printf(rest: &mut &[u8]) -> Result<Expr, ParseError> {
 			}
 
 			if end == 0 {
-				return Err(ParseError { expected: "printf precision", actual: rest.first().map(|b| b.escape_ascii().to_string()), pos: None });
+				return Err(("printf precision", rest.first()).into());
 			}
 
 			// TODO: Use split_at_unchecked when that is stabilized
@@ -265,9 +263,9 @@ fn parse_printf(rest: &mut &[u8]) -> Result<Expr, ParseError> {
 
 			let precision =
 				std::str::from_utf8(s)
-				.map_err(|_| ParseError { expected: "printf precision", actual: Some(s.escape_ascii().to_string()), pos: None })?
+				.map_err(|_| ("printf precision", Some(s)))?
 				.parse()
-				.map_err(|_| ParseError { expected: "printf precision", actual: Some(s.escape_ascii().to_string()), pos: None })?;
+				.map_err(|_| ("printf precision", Some(s)))?;
 			width_and_precision = Some((width, Some(precision)));
 		}
 		else {
@@ -281,7 +279,7 @@ fn parse_printf(rest: &mut &[u8]) -> Result<Expr, ParseError> {
 		Some(b's') => PrintfKind::String,
 		Some(b'x') => PrintfKind::LowerHex,
 		Some(b'X') => PrintfKind::UpperHex,
-		b => return Err(ParseError { expected: "printf kind", actual: b.map(|b| b.escape_ascii().to_string()), pos: None }),
+		b => return Err(("printf kind", b).into()),
 	};
 
 	Ok(Expr::Printf {
@@ -334,3 +332,29 @@ impl std::fmt::Display for ParseError {
 }
 
 impl std::error::Error for ParseError {}
+
+impl From<(&'static str, Option<u8>)> for ParseError {
+	fn from((expected, actual): (&'static str, Option<u8>)) -> Self {
+		ParseError {
+			expected,
+			actual: actual.map(|actual| actual.escape_ascii().to_string()),
+			pos: None,
+		}
+	}
+}
+
+impl From<(&'static str, Option<&u8>)> for ParseError {
+	fn from((expected, actual): (&'static str, Option<&u8>)) -> Self {
+		(expected, actual.copied()).into()
+	}
+}
+
+impl From<(&'static str, Option<&[u8]>)> for ParseError {
+	fn from((expected, actual): (&'static str, Option<&[u8]>)) -> Self {
+		ParseError {
+			expected,
+			actual: actual.map(|actual| actual.escape_ascii().to_string()),
+			pos: None,
+		}
+	}
+}
