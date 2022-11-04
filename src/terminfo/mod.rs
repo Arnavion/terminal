@@ -72,7 +72,7 @@ enum CacheEntry<T> {
 impl Terminfo {
 	pub fn from_env() -> Result<Terminfo, FromEnvError> {
 		let term = std::env::var_os("TERM").ok_or(FromEnvError::EnvVarNotSet)?;
-		Self::from_term_name(&term).map_err(FromEnvError::FromTermName)
+		Self::from_term_name(term).map_err(FromEnvError::FromTermName)
 	}
 
 	pub fn from_term_name(term: impl AsRef<std::ffi::OsStr>) -> Result<Terminfo, FromTermNameError> {
