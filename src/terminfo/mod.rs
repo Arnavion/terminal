@@ -709,6 +709,7 @@ fn from_bytes_until_nul(s: &[u8]) -> Result<&std::ffi::CStr, ParseError> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(transparent)]
 struct Checked<T>(T);
 
 impl<T> std::fmt::Display for Checked<T> where T: std::fmt::Display {
