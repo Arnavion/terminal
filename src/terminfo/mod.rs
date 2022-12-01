@@ -1067,21 +1067,21 @@ mod tests {
 		let distro_entries = if let Ok(entries) = std::fs::read_dir("/usr/share/terminfo") { Some(entries) } else { None };
 		let entries = admin_entries.into_iter().flatten().chain(distro_entries.into_iter().flatten());
 		for entry in entries {
-			let entry = if let Ok(entry) = entry { entry } else { continue; };
+			let Ok(entry) = entry else { continue; };
 			let is_dir = if let Ok(ft) = entry.file_type() { ft.is_dir() } else { false };
 			if !is_dir {
 				continue;
 			}
 
-			let entries = if let Ok(entries) = std::fs::read_dir(entry.path()) { entries } else { return; };
+			let Ok(entries) = std::fs::read_dir(entry.path()) else { return; };
 			for entry in entries {
-				let entry = if let Ok(entry) = entry { entry } else { continue; };
+				let Ok(entry) = entry else { continue; };
 				let is_file = if let Ok(ft) = entry.file_type() { ft.is_file() } else { false };
 				if !is_file {
 					continue;
 				}
 
-				let f = if let Ok(f) = std::fs::File::open(entry.path()) { f } else { continue; };
+				let Ok(f) = std::fs::File::open(entry.path()) else { continue; };
 				let mut f = std::io::BufReader::new(f);
 				let terminfo = match Terminfo::parse(&mut f, known_overrides::KNOWN_OVERRIDES) {
 					Ok(terminfo) => terminfo,
