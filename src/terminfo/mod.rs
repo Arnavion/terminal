@@ -62,8 +62,9 @@ struct CachedCapabilities {
 	sync: CacheEntry<(Vec<u8>, Vec<u8>)>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 enum CacheEntry<T> {
+	#[default]
 	Unknown,
 	Present(T),
 	Absent,
@@ -616,12 +617,6 @@ impl StringsStorage for ExtendedStringsTable {
 
 	unsafe fn get_unchecked(&self, range: std::ops::Range<usize>) -> &[u8] {
 		self.0.get_unchecked(range)
-	}
-}
-
-impl<T> Default for CacheEntry<T> {
-	fn default() -> Self {
-		CacheEntry::Unknown
 	}
 }
 
