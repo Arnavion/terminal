@@ -5,4 +5,4 @@ authors = ["Arnavion <me@arnavion.dev>"]
 edition = "2021"
 
 [dependencies]
-libc = { version = "0.2", default-features = false }
+libc = { version = "0.2.21", default-features = false }
