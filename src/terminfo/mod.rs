@@ -587,9 +587,8 @@ trait StringsStorage {
 	unsafe fn get_unchecked(&self, range: std::ops::Range<usize>) -> &[u8];
 
 	fn get_cstr_range(&self, start: Checked<usize>) -> Result<TrustedRange<Self>, ParseError> {
-		#[allow(clippy::or_fun_call)] // TODO: https://github.com/rust-lang/rust-clippy/issues/9608
 		let s = self.get_from(start.0).ok_or(ParseError::StringOutOfBounds(start.0))?;
-		let s = from_bytes_until_nul(s)?;
+		let s = std::ffi::CStr::from_bytes_until_nul(s).map_err(|_| ParseError::MalformedString)?;
 		let end = (start + s.to_bytes().len())?;
 		let range = TrustedRange((start.0)..(end.0), Default::default());
 		Ok(range)
@@ -695,14 +694,6 @@ fn read_nul_if_odd(f: &mut impl std::io::Read, num_bytes_read: Checked<usize>) -
 	}
 
 	Ok(())
-}
-
-// TODO: Replace with std::ffi::CStr::from_bytes_until_nul when that is stabilized
-fn from_bytes_until_nul(s: &[u8]) -> Result<&std::ffi::CStr, ParseError> {
-	s.iter()
-		.position(|&b| b == b'\0')
-		.map(|nul_pos| unsafe { std::ffi::CStr::from_bytes_with_nul_unchecked(s.get_unchecked(..=nul_pos)) })
-		.ok_or(ParseError::MalformedString)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
