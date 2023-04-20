@@ -57,6 +57,7 @@ struct CachedCapabilities {
 	clear_line: CacheEntry<Vec<u8>>,
 	clear_screen: CacheEntry<Vec<u8>>,
 	clear_scrollback: CacheEntry<Vec<u8>>,
+	hide_cursor: CacheEntry<(Vec<u8>, Vec<u8>)>,
 	move_cursor: CacheEntry<Vec<parameterized::Expr>>,
 	no_wraparound: CacheEntry<(Vec<u8>, Vec<u8>)>,
 	sync: CacheEntry<(Vec<u8>, Vec<u8>)>,
@@ -465,6 +466,7 @@ terminfo_caching_method_enable_disable!(alternate_screen => [28, 40]);
 terminfo_caching_method_single!(clear_line => [6]);
 terminfo_caching_method_single!(clear_screen => [5]);
 terminfo_caching_method_extended_single!(clear_scrollback => [b"E3"]);
+terminfo_caching_method_enable_disable!(hide_cursor => [13, 16]);
 terminfo_caching_method_enable_disable!(no_wraparound => [152, 151]);
 
 impl Terminfo {
@@ -956,6 +958,7 @@ mod tests {
 			clear_line() = b"\x1b[K",
 			clear_screen() = b"\x1b[H\x1b[2J",
 			clear_scrollback() = b"\x1b[3J",
+			hide_cursor() = b"\x1b[?25l" / b"\x1b[?12l\x1b[?25h",
 			move_cursor(2, 0).unwrap() => b"\x1b[3;1H",
 			no_wraparound() = b"\x1b[?7l" / b"\x1b[?7h",
 			sync().unwrap() = b"\x1b[?2026h" / b"\x1b[?2026l",
@@ -966,6 +969,7 @@ mod tests {
 			clear_line() = b"\x1b[K",
 			clear_screen() = b"\x1b[H\x1b[2J",
 			clear_scrollback() = b"\x1b[3J",
+			hide_cursor() = b"\x1b[?25l" / b"\x1b[?12l\x1b[?25h",
 			move_cursor(2, 0).unwrap() => b"\x1b[3;1H",
 			no_wraparound() = b"\x1b[?7l" / b"\x1b[?7h",
 			sync().unwrap() = b"" / b"",
@@ -976,6 +980,7 @@ mod tests {
 			clear_line() = b"\x1b[K",
 			clear_screen() = b"\x1b[H\x1b[J",
 			clear_scrollback() = b"",
+			hide_cursor() = b"\x1b[?25l" / b"\x1b[34h\x1b[?25h",
 			move_cursor(2, 0).unwrap() => b"\x1b[3;1H",
 			no_wraparound() = b"" / b"",
 			sync().unwrap() = b"" / b"",
@@ -986,6 +991,7 @@ mod tests {
 			clear_line() = b"\x1b[K",
 			clear_screen() = b"\x1b[H\x1b[2J",
 			clear_scrollback() = b"",
+			hide_cursor() = b"\x1b[?25l" / b"\x1b[?25h",
 			move_cursor(2, 0).unwrap() => b"\x1b[3;1H",
 			no_wraparound() = b"" / b"",
 			sync().unwrap() = b"" / b"",
@@ -996,6 +1002,7 @@ mod tests {
 			clear_line() = b"\x1b[K",
 			clear_screen() = b"\x1b[H\x1b[J",
 			clear_scrollback() = b"\x1b[3J",
+			hide_cursor() = b"\x1b[?25l" / b"\x1b[34h\x1b[?25h",
 			move_cursor(2, 0).unwrap() => b"\x1b[3;1H",
 			no_wraparound() = b"\x1b[?7l" / b"\x1b[?7h",
 			sync().unwrap() = b"" / b"",
@@ -1006,6 +1013,7 @@ mod tests {
 			clear_line() = b"\x1b[K",
 			clear_screen() = b"\x1b[H\x1b[2J",
 			clear_scrollback() = b"\x1b[3J",
+			hide_cursor() = b"\x1b[?25l" / b"\x1b[?12l\x1b[?25h",
 			move_cursor(2, 0).unwrap() => b"\x1b[3;1H",
 			no_wraparound() = b"\x1b[?7l" / b"\x1b[?7h",
 			sync().unwrap() = b"" / b"",
