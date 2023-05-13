@@ -138,17 +138,7 @@ fn parse_param_num(rest: &mut &[u8]) -> Result<usize, ParseError> {
 }
 
 fn parse_integer(rest: &mut &[u8]) -> Result<i32, ParseError> {
-	let mut end = 0;
-	for &b in *rest {
-		if b == b'}' {
-			break;
-		}
-
-		end += 1;
-	}
-	if end == 0 {
-		return Err(("integer", rest.first()).into());
-	}
+	let end = rest.iter().position(|&b| b == b'}').unwrap_or(rest.len());
 
 	// TODO: Use split_at_unchecked when that is stabilized
 	let (s, rest_) = unsafe { (rest.get_unchecked(..end), rest.get_unchecked(end..)) };
@@ -219,59 +209,39 @@ fn parse_printf(rest: &mut &[u8]) -> Result<Expr, ParseError> {
 		}
 	}
 
-	let mut width_and_precision = None;
-
-	if let b'1'..=b'9' = rest.first().ok_or(("printf width or kind", None::<u8>))? {
-		let mut end = 0;
-		for &b in *rest {
-			if let b'0'..=b'9' = b {
-				end += 1;
-			}
-			else {
-				break;
-			}
-		}
-
-		// TODO: Use split_at_unchecked when that is stabilized
-		let (s, rest_) = unsafe { (rest.get_unchecked(..end), rest.get_unchecked(end..)) };
-		*rest = rest_;
-
-		let width =
-			std::str::from_utf8(s)
-			.map_err(|_| ("printf width", Some(s)))?
-			.parse()
-			.map_err(|_| ("printf width", Some(s)))?;
-
-		if split_start(rest, b".") {
-			let mut end = 0;
-			for &b in *rest {
-				if let b'0'..=b'9' = b {
-					end += 1;
-				}
-				else {
-					break;
-				}
-			}
-
-			if end == 0 {
-				return Err(("printf precision", rest.first()).into());
-			}
-
+	let width_and_precision =
+		if let b'1'..=b'9' = rest.first().ok_or(("printf width or kind", None::<u8>))? {
+			let end = rest.iter().position(|&b| !b.is_ascii_digit()).unwrap_or(rest.len());
 			// TODO: Use split_at_unchecked when that is stabilized
 			let (s, rest_) = unsafe { (rest.get_unchecked(..end), rest.get_unchecked(end..)) };
 			*rest = rest_;
 
-			let precision =
+			let width =
 				std::str::from_utf8(s)
-				.map_err(|_| ("printf precision", Some(s)))?
+				.map_err(|_| ("printf width", Some(s)))?
 				.parse()
-				.map_err(|_| ("printf precision", Some(s)))?;
-			width_and_precision = Some((width, Some(precision)));
+				.map_err(|_| ("printf width", Some(s)))?;
+
+			if split_start(rest, b".") {
+				let end = rest.iter().position(|&b| !b.is_ascii_digit()).unwrap_or(rest.len());
+				// TODO: Use split_at_unchecked when that is stabilized
+				let (s, rest_) = unsafe { (rest.get_unchecked(..end), rest.get_unchecked(end..)) };
+				*rest = rest_;
+
+				let precision =
+					std::str::from_utf8(s)
+					.map_err(|_| ("printf precision", Some(s)))?
+					.parse()
+					.map_err(|_| ("printf precision", Some(s)))?;
+				Some((width, Some(precision)))
+			}
+			else {
+				Some((width, None))
+			}
 		}
 		else {
-			width_and_precision = Some((width, None));
-		}
-	}
+			None
+		};
 
 	let kind = match split_first(rest) {
 		Some(b'd') => PrintfKind::Decimal,
