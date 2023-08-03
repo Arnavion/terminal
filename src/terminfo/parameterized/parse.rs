@@ -34,31 +34,31 @@ fn parse_expr_until(rest: &mut &[u8], until: &[&[u8]]) -> Result<Vec<Expr>, Pars
 }
 
 fn parse_percent(rest: &mut &[u8]) -> Result<Expr, ParseError> {
-	match rest.split_first() {
-		Some((b'!', rest_)) => { *rest = rest_; Ok(Expr::Math(Math::Not)) },
+	match rest {
+		[b'!', rest_ @ ..] => { *rest = rest_; Ok(Expr::Math(Math::Not)) },
 
-		Some((b'%', rest_)) => { *rest = rest_; Ok(Expr::Literal(b'%')) },
+		[b'%', rest_ @ ..] => { *rest = rest_; Ok(Expr::Literal(b'%')) },
 
-		Some((b'&', rest_)) => { *rest = rest_; Ok(Expr::Math(Math::BitAnd)) },
+		[b'&', rest_ @ ..] => { *rest = rest_; Ok(Expr::Math(Math::BitAnd)) },
 
 		// TODO: char constant
-		// Some((b'\'', rest_)) => { *rest = rest_; },
+		// [b'\'', rest_ @ ..] => { *rest = rest_; },
 
-		Some((b'*', rest_)) => { *rest = rest_; Ok(Expr::Math(Math::Mul)) },
+		[b'*', rest_ @ ..] => { *rest = rest_; Ok(Expr::Math(Math::Mul)) },
 
-		Some((b'+', rest_)) => { *rest = rest_; Ok(Expr::Math(Math::Add)) },
+		[b'+', rest_ @ ..] => { *rest = rest_; Ok(Expr::Math(Math::Add)) },
 
-		Some((b'-', rest_)) => { *rest = rest_; Ok(Expr::Math(Math::Sub)) },
+		[b'-', rest_ @ ..] => { *rest = rest_; Ok(Expr::Math(Math::Sub)) },
 
-		Some((b'/', rest_)) => { *rest = rest_; Ok(Expr::Math(Math::Div)) },
+		[b'/', rest_ @ ..] => { *rest = rest_; Ok(Expr::Math(Math::Div)) },
 
-		Some((b'<', rest_)) => { *rest = rest_; Ok(Expr::Cmp(Cmp::Less)) },
+		[b'<', rest_ @ ..] => { *rest = rest_; Ok(Expr::Cmp(Cmp::Less)) },
 
-		Some((b'=', rest_)) => { *rest = rest_; Ok(Expr::Cmp(Cmp::Equal)) },
+		[b'=', rest_ @ ..] => { *rest = rest_; Ok(Expr::Cmp(Cmp::Equal)) },
 
-		Some((b'>', rest_)) => { *rest = rest_; Ok(Expr::Cmp(Cmp::Greater)) },
+		[b'>', rest_ @ ..] => { *rest = rest_; Ok(Expr::Cmp(Cmp::Greater)) },
 
-		Some((b'?', rest_)) => {
+		[b'?', rest_ @ ..] => {
 			*rest = rest_;
 
 			let cond = parse_expr_until(rest, &[b"%t"])?;
@@ -69,11 +69,11 @@ fn parse_percent(rest: &mut &[u8]) -> Result<Expr, ParseError> {
 			parse_if(rest, cond)
 		},
 
-		Some((b'A', rest_)) => { *rest = rest_; Ok(Expr::Math(Math::And)) },
+		[b'A', rest_ @ ..] => { *rest = rest_; Ok(Expr::Math(Math::And)) },
 
-		Some((b'O', rest_)) => { *rest = rest_; Ok(Expr::Math(Math::Or)) },
+		[b'O', rest_ @ ..] => { *rest = rest_; Ok(Expr::Math(Math::Or)) },
 
-		Some((b'P', rest_)) => {
+		[b'P', rest_ @ ..] => {
 			*rest = rest_;
 			match split_first(rest) {
 				Some(b @ (b'A'..=b'Z' | b'a'..=b'z')) => Ok(Expr::StoreVariable(b)),
@@ -81,9 +81,9 @@ fn parse_percent(rest: &mut &[u8]) -> Result<Expr, ParseError> {
 			}
 		},
 
-		Some((b'^', rest_)) => { *rest = rest_; Ok(Expr::Math(Math::BitXor)) },
+		[b'^', rest_ @ ..] => { *rest = rest_; Ok(Expr::Math(Math::BitXor)) },
 
-		Some((b'c', rest_)) => {
+		[b'c', rest_ @ ..] => {
 			*rest = rest_;
 			Ok(Expr::Printf {
 				flags: PrintfFlags {
@@ -96,7 +96,7 @@ fn parse_percent(rest: &mut &[u8]) -> Result<Expr, ParseError> {
 			})
 		},
 
-		Some((b'g', rest_)) => {
+		[b'g', rest_ @ ..] => {
 			*rest = rest_;
 			match split_first(rest) {
 				Some(b @ (b'A'..=b'Z' | b'a'..=b'z')) => Ok(Expr::LoadVariable(b)),
@@ -104,27 +104,27 @@ fn parse_percent(rest: &mut &[u8]) -> Result<Expr, ParseError> {
 			}
 		},
 
-		Some((b'i', rest_)) => { *rest = rest_; Ok(Expr::IncrementFirstTwoIntegerParams) },
+		[b'i', rest_ @ ..] => { *rest = rest_; Ok(Expr::IncrementFirstTwoIntegerParams) },
 
-		Some((b'l', rest_)) => { *rest = rest_; Ok(Expr::Strlen) },
+		[b'l', rest_ @ ..] => { *rest = rest_; Ok(Expr::Strlen) },
 
-		Some((b'm', rest_)) => { *rest = rest_; Ok(Expr::Math(Math::Rem)) },
+		[b'm', rest_ @ ..] => { *rest = rest_; Ok(Expr::Math(Math::Rem)) },
 
-		Some((b'p', rest_)) => {
+		[b'p', rest_ @ ..] => {
 			*rest = rest_;
 			let param_num = parse_param_num(rest)?;
 			Ok(Expr::Param(param_num))
 		},
 
-		Some((b'{', rest_)) => {
+		[b'{', rest_ @ ..] => {
 			*rest = rest_;
 			let integer = parse_integer(rest)?;
 			Ok(Expr::Integer(integer))
 		},
 
-		Some((b'|', rest_)) => { *rest = rest_; Ok(Expr::Math(Math::BitOr)) },
+		[b'|', rest_ @ ..] => { *rest = rest_; Ok(Expr::Math(Math::BitOr)) },
 
-		Some((b'~', rest_)) => { *rest = rest_; Ok(Expr::Math(Math::BitNot)) },
+		[b'~', rest_ @ ..] => { *rest = rest_; Ok(Expr::Math(Math::BitNot)) },
 
 		_ => parse_printf(rest),
 	}
@@ -199,13 +199,14 @@ fn parse_printf(rest: &mut &[u8]) -> Result<Expr, ParseError> {
 		sign: PrintfFlagSign::Default,
 	};
 	loop {
-		match rest.split_first().ok_or(("printf flags or width or kind", None::<u8>))? {
-			(b' ', rest_) => { *rest = rest_; flags.sign = PrintfFlagSign::Space; },
-			(b'#', rest_) => { *rest = rest_; flags.alternate_form = true; },
-			(b'+', rest_) => { *rest = rest_; flags.sign = PrintfFlagSign::Plus; },
-			(b'-', rest_) => { *rest = rest_; flags.left = PrintfFlagLeft::Aligned; },
-			(b'0', rest_) => { *rest = rest_; flags.left = PrintfFlagLeft::ZeroPadded; },
-			_ => break,
+		match rest {
+			[b' ', rest_ @ ..] => { *rest = rest_; flags.sign = PrintfFlagSign::Space; },
+			[b'#', rest_ @ ..] => { *rest = rest_; flags.alternate_form = true; },
+			[b'+', rest_ @ ..] => { *rest = rest_; flags.sign = PrintfFlagSign::Plus; },
+			[b'-', rest_ @ ..] => { *rest = rest_; flags.left = PrintfFlagLeft::Aligned; },
+			[b'0', rest_ @ ..] => { *rest = rest_; flags.left = PrintfFlagLeft::ZeroPadded; },
+			[_, ..] => break,
+			[] => return Err(("printf flags or width or kind", None::<u8>).into()),
 		}
 	}
 
@@ -260,12 +261,12 @@ fn parse_printf(rest: &mut &[u8]) -> Result<Expr, ParseError> {
 }
 
 fn split_first(rest: &mut &[u8]) -> Option<u8> {
-	match rest.split_first() {
-		Some((&b, rest_)) => {
+	match rest {
+		[b, rest_ @ ..] => {
 			*rest = rest_;
-			Some(b)
+			Some(*b)
 		},
-		None => None,
+		[] => None,
 	}
 }
 
