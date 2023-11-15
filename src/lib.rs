@@ -13,10 +13,10 @@ pub trait Terminal: std::io::Write {
 	fn width(&self) -> std::io::Result<usize>;
 }
 
-impl<W> Terminal for W where W: std::io::Write + std::os::unix::io::AsRawFd {
+impl<W> Terminal for W where W: std::io::Write + std::os::fd::AsRawFd {
 	fn width(&self) -> std::io::Result<usize> {
 		unsafe {
-			let fd = std::os::unix::io::AsRawFd::as_raw_fd(self);
+			let fd = std::os::fd::AsRawFd::as_raw_fd(self);
 
 			nonzero_or_errno(libc::isatty(fd))?;
 
@@ -61,15 +61,15 @@ macro_rules! forward_terminal_to_inner {
 	};
 }
 
-pub struct RawMode<W> where W: std::os::unix::io::AsRawFd {
+pub struct RawMode<W> where W: std::os::fd::AsRawFd {
 	inner: W,
 	original_termios: libc::termios,
 }
 
-impl<W> RawMode<W> where W: std::os::unix::io::AsRawFd {
+impl<W> RawMode<W> where W: std::os::fd::AsRawFd {
 	pub fn new(inner: W) -> std::io::Result<Self> {
 		unsafe {
-			let inner_fd = std::os::unix::io::AsRawFd::as_raw_fd(&inner);
+			let inner_fd = std::os::fd::AsRawFd::as_raw_fd(&inner);
 
 			let mut termios = std::mem::MaybeUninit::uninit();
 			zero_or_errno(libc::tcgetattr(inner_fd, termios.as_mut_ptr()))?;
@@ -89,21 +89,21 @@ impl<W> RawMode<W> where W: std::os::unix::io::AsRawFd {
 	}
 }
 
-impl<W> Drop for RawMode<W> where W: std::os::unix::io::AsRawFd {
+impl<W> Drop for RawMode<W> where W: std::os::fd::AsRawFd {
 	fn drop(&mut self) {
 		unsafe {
-			let inner_fd = std::os::unix::io::AsRawFd::as_raw_fd(&self.inner);
+			let inner_fd = std::os::fd::AsRawFd::as_raw_fd(&self.inner);
 			let _ = libc::tcsetattr(inner_fd, 0, &self.original_termios);
 		}
 	}
 }
 
 forward_std_io_write_to_inner! {
-	impl<W> std::io::Write for RawMode<W> where W: std::io::Write + std::os::unix::io::AsRawFd
+	impl<W> std::io::Write for RawMode<W> where W: std::io::Write + std::os::fd::AsRawFd
 }
 
 forward_terminal_to_inner! {
-	impl<W> Terminal for RawMode<W> where W: std::os::unix::io::AsRawFd + Terminal
+	impl<W> Terminal for RawMode<W> where W: std::os::fd::AsRawFd + Terminal
 }
 
 pub struct VtMode<W> where W: std::io::Write {
