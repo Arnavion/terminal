@@ -16,7 +16,7 @@ pub use known_overrides::Overrides;
 
 pub mod parameterized;
 
-pub struct Terminfo {
+pub struct RawTerminfo {
 	terminal_names: Box<str>,
 
 	boolean_capabilities: Box<[Capability<bool>]>,
@@ -28,11 +28,6 @@ pub struct Terminfo {
 	extended_number_capabilities: Box<[(TrustedRange<ExtendedStringsTable>, u32)]>,
 	extended_string_capabilities: Box<[(TrustedRange<ExtendedStringsTable>, Capability<TrustedRange<ExtendedStringsTable>>)]>,
 	extended_strings_table: ExtendedStringsTable,
-
-	cached_capabilities: CachedCapabilities,
-
-	overridden_string_capabilities: std::collections::BTreeMap<usize, Capability<&'static [u8]>>,
-	overridden_extended_string_capabilities: std::collections::BTreeMap<&'static [u8], Capability<&'static [u8]>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -50,6 +45,13 @@ struct StringsTable(Box<[u8]>);
 
 #[repr(transparent)]
 struct ExtendedStringsTable(Box<[u8]>);
+
+pub struct Terminfo {
+	inner: RawTerminfo,
+	cached_capabilities: CachedCapabilities,
+	overridden_string_capabilities: std::collections::BTreeMap<usize, Capability<&'static [u8]>>,
+	overridden_extended_string_capabilities: std::collections::BTreeMap<&'static [u8], Capability<&'static [u8]>>,
+}
 
 #[derive(Default)]
 struct CachedCapabilities {
@@ -71,13 +73,13 @@ enum CacheEntry<T> {
 	Absent,
 }
 
-impl Terminfo {
-	pub fn from_env() -> Result<Terminfo, FromEnvError> {
+impl RawTerminfo {
+	pub fn from_env() -> Result<Self, FromEnvError> {
 		let term = std::env::var_os("TERM").ok_or(FromEnvError::EnvVarNotSet)?;
 		Self::from_term_name(term).map_err(FromEnvError::FromTermName)
 	}
 
-	pub fn from_term_name(term: impl AsRef<std::ffi::OsStr>) -> Result<Terminfo, FromTermNameError> {
+	pub fn from_term_name(term: impl AsRef<std::ffi::OsStr>) -> Result<Self, FromTermNameError> {
 		// TODO: These depend on distro's configure options for ncurses. Make them compile-time options instead of hard-coding?
 		const TERMINFO: &[u8] = b"/usr/share/terminfo";
 		const TERMINFO_DIRS: &[u8] = b"/etc/terminfo:/usr/share/terminfo";
@@ -127,10 +129,10 @@ impl Terminfo {
 			}
 		};
 		let mut f = std::io::BufReader::new(f);
-		Self::parse(&mut f, known_overrides::KNOWN_OVERRIDES).map_err(|err| FromTermNameError::Parse { path, inner: err })
+		Self::parse(&mut f).map_err(|err| FromTermNameError::Parse { path, inner: err })
 	}
 
-	pub fn parse(f: &mut impl std::io::BufRead, overrides: &[(&str, Overrides)]) -> Result<Terminfo, ParseError> {
+	pub fn parse(f: &mut impl std::io::BufRead) -> Result<Self, ParseError> {
 		let reader = Reader::new(f)?;
 
 		let terminal_names_num_bytes = Checked::<usize>(read_short(f)?.try_into().map_err(ParseError::IntegerOutOfRange)?);
@@ -191,7 +193,7 @@ impl Terminfo {
 		}
 		let string_capabilities = string_capabilities.into();
 
-		let mut result = Terminfo {
+		let mut result = Self {
 			terminal_names,
 
 			boolean_capabilities,
@@ -203,11 +205,6 @@ impl Terminfo {
 			extended_number_capabilities: Box::new([]),
 			extended_string_capabilities: Box::new([]),
 			extended_strings_table: ExtendedStringsTable(Box::new([])),
-
-			cached_capabilities: Default::default(),
-
-			overridden_string_capabilities: Default::default(),
-			overridden_extended_string_capabilities: Default::default(),
 		};
 
 		// Undocumented detail: There is another even byte padding between strings table and extended header.
@@ -314,17 +311,6 @@ impl Terminfo {
 		result.extended_string_capabilities = extended_string_capabilities;
 		result.extended_strings_table = extended_strings_table;
 
-		let mut overridden_string_capabilities = std::mem::take(&mut result.overridden_string_capabilities);
-		let mut overridden_extended_string_capabilities = std::mem::take(&mut result.overridden_extended_string_capabilities);
-		for name in result.terminal_names() {
-			if let Some(overrides) = overrides.iter().find_map(|&(term, overrides)| (term == name).then_some(overrides)) {
-				overridden_string_capabilities.extend(overrides.string_capabilities.iter().copied());
-				overridden_extended_string_capabilities.extend(overrides.extended_string_capabilities.iter().copied());
-			}
-		}
-		result.overridden_string_capabilities = overridden_string_capabilities;
-		result.overridden_extended_string_capabilities = overridden_extended_string_capabilities;
-
 		Ok(result)
 	}
 
@@ -342,11 +328,7 @@ impl Terminfo {
 
 	pub fn string_capabilities(&self) -> impl Iterator<Item = Capability<&[u8]>> {
 		self.string_capabilities.iter()
-			.enumerate()
-			.map(|(i, range)|
-				self.overridden_string_capabilities.get(&i).copied()
-				.unwrap_or_else(|| range.as_ref().map(|range| self.strings_table.get_cstr_bytes(range.clone())))
-			)
+			.map(|range| range.as_ref().map(|range| self.strings_table.get_cstr_bytes(range.clone())))
 	}
 
 	pub fn extended_boolean_capabilities(&self) -> impl Iterator<Item = (&[u8], bool)> {
@@ -369,11 +351,79 @@ impl Terminfo {
 		self.extended_string_capabilities.iter()
 			.map(|(name_range, value_range)| {
 				let name = self.extended_strings_table.get_cstr_bytes(name_range.clone());
-				let value =
-					self.overridden_extended_string_capabilities.get(name).copied()
-					.unwrap_or_else(|| value_range.as_ref().map(|value_range| self.extended_strings_table.get_cstr_bytes(value_range.clone())));
+				let value = value_range.as_ref().map(|value_range| self.extended_strings_table.get_cstr_bytes(value_range.clone()));
 				(name, value)
 			})
+	}
+}
+
+impl Terminfo {
+	pub fn from_env() -> Result<Self, FromEnvError> {
+		let inner = RawTerminfo::from_env()?;
+		Ok(Self::with_overrides(inner, known_overrides::KNOWN_OVERRIDES))
+	}
+
+	pub fn from_term_name(term: impl AsRef<std::ffi::OsStr>) -> Result<Self, FromTermNameError> {
+		let inner = RawTerminfo::from_term_name(term)?;
+		Ok(Self::with_overrides(inner, known_overrides::KNOWN_OVERRIDES))
+	}
+
+	pub fn parse(f: &mut impl std::io::BufRead) -> Result<Self, ParseError> {
+		let inner = RawTerminfo::parse(f)?;
+		Ok(Self::with_overrides(inner, known_overrides::KNOWN_OVERRIDES))
+	}
+
+	pub fn new(inner: RawTerminfo) -> Self {
+		Self::with_overrides(inner, known_overrides::KNOWN_OVERRIDES)
+	}
+
+	pub fn with_overrides(inner: RawTerminfo, overrides: &[(&str, Overrides)]) -> Self {
+		let mut result = Self {
+			inner,
+			cached_capabilities: Default::default(),
+			overridden_string_capabilities: Default::default(),
+			overridden_extended_string_capabilities: Default::default(),
+		};
+
+		for name in result.inner.terminal_names() {
+			if let Some(overrides) = overrides.iter().find_map(|&(term, overrides)| (term == name).then_some(overrides)) {
+				result.overridden_string_capabilities.extend(overrides.string_capabilities.iter().copied());
+				result.overridden_extended_string_capabilities.extend(overrides.extended_string_capabilities.iter().copied());
+			}
+		}
+
+		result
+	}
+
+	pub fn terminal_names(&self) -> impl Iterator<Item = &str> {
+		self.inner.terminal_names()
+	}
+
+	pub fn boolean_capabilities(&self) -> impl Iterator<Item = Capability<bool>> + '_ {
+		self.inner.boolean_capabilities()
+	}
+
+	pub fn number_capabilities(&self) -> impl Iterator<Item = Capability<u32>> + '_ {
+		self.inner.number_capabilities()
+	}
+
+	pub fn string_capabilities(&self) -> impl Iterator<Item = Capability<&[u8]>> {
+		self.inner.string_capabilities()
+			.enumerate()
+			.map(|(i, value)| self.overridden_string_capabilities.get(&i).copied().unwrap_or(value))
+	}
+
+	pub fn extended_boolean_capabilities(&self) -> impl Iterator<Item = (&[u8], bool)> {
+		self.inner.extended_boolean_capabilities()
+	}
+
+	pub fn extended_number_capabilities(&self) -> impl Iterator<Item = (&[u8], u32)> {
+		self.inner.extended_number_capabilities()
+	}
+
+	pub fn extended_string_capabilities(&self) -> impl Iterator<Item = (&[u8], Capability<&[u8]>)> {
+		self.inner.extended_string_capabilities()
+			.filter(|(name, _)| !self.overridden_extended_string_capabilities.contains_key(name))
 			.chain(self.overridden_extended_string_capabilities.iter().map(|(&name, &value)| (name, value)))
 	}
 }
@@ -530,10 +580,10 @@ impl Terminfo {
 	}
 }
 
-impl std::fmt::Debug for Terminfo {
+impl std::fmt::Debug for RawTerminfo {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		f
-			.debug_struct("Terminfo")
+			.debug_struct("RawTerminfo")
 			.field("terminal_names", &self.terminal_names().collect::<Vec<_>>())
 			.field("boolean_capabilities", &self.boolean_capabilities)
 			.field("number_capabilities", &self.number_capabilities)
@@ -541,6 +591,15 @@ impl std::fmt::Debug for Terminfo {
 			.field("extended_boolean_capabilities", &self.extended_boolean_capabilities().map(|(name, value)| (std::ffi::CString::new(name), value)).collect::<Vec<_>>())
 			.field("extended_number_capabilities", &self.extended_number_capabilities().map(|(name, value)| (std::ffi::CString::new(name), value)).collect::<Vec<_>>())
 			.field("extended_string_capabilities", &self.extended_string_capabilities().map(|(name, value)| (std::ffi::CString::new(name), value.map(std::ffi::CString::new))).collect::<Vec<_>>())
+			.finish_non_exhaustive()
+	}
+}
+
+impl std::fmt::Debug for Terminfo {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f
+			.debug_struct("Terminfo")
+			.field("inner", &self.inner)
 			.finish_non_exhaustive()
 	}
 }
@@ -866,7 +925,7 @@ impl std::error::Error for ParameterizedStringError {
 
 #[cfg(test)]
 mod tests {
-	use super::{known_overrides, parameterized, Capability, Terminfo};
+	use super::{parameterized, Capability, RawTerminfo, Terminfo};
 
 	macro_rules! test_terms {
 		(@inner $terminfo:ident { $($tests:tt)* } { }) => {
@@ -933,7 +992,8 @@ mod tests {
 			$(
 				#[test]
 				fn $test_name() {
-					let mut terminfo = Terminfo::from_term_name($term).unwrap();
+					let terminfo = RawTerminfo::from_term_name($term).unwrap();
+					let mut terminfo = Terminfo::new(terminfo);
 					println!("{terminfo:?}");
 
 					test_terms! {
@@ -1018,7 +1078,7 @@ mod tests {
 	#[test]
 	fn current_term() {
 		if std::env::var_os("TERM").is_some() {
-			let terminfo = Terminfo::from_env().unwrap();
+			let terminfo = RawTerminfo::from_env().unwrap();
 			println!("{terminfo:?}");
 		}
 	}
@@ -1081,7 +1141,7 @@ mod tests {
 
 				let Ok(f) = std::fs::File::open(entry.path()) else { continue; };
 				let mut f = std::io::BufReader::new(f);
-				let terminfo = match Terminfo::parse(&mut f, known_overrides::KNOWN_OVERRIDES) {
+				let terminfo = match RawTerminfo::parse(&mut f) {
 					Ok(terminfo) => terminfo,
 					Err(err) => panic!("could not parse {}: {err}", entry.path().display()),
 				};
