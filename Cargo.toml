@@ -7,3 +7,15 @@ edition = "2021"
 
 [dependencies]
 libc = { version = "0.2.21", default-features = false }
+
+[lints.rust]
+rust_2018_idioms = "deny"
+warnings = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+default_trait_access = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+too_many_lines = "allow"

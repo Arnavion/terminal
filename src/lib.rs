@@ -1,12 +1,3 @@
-#![deny(rust_2018_idioms, warnings)]
-#![deny(clippy::all, clippy::pedantic)]
-#![allow(
-	clippy::default_trait_access,
-	clippy::missing_errors_doc,
-	clippy::missing_panics_doc,
-	clippy::too_many_lines,
-)]
-
 pub mod terminfo;
 
 pub trait Terminal: std::io::Write {
