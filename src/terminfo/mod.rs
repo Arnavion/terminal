@@ -17,16 +17,16 @@ pub use known_overrides::Overrides;
 pub mod parameterized;
 
 pub struct Terminfo {
-	terminal_names: String,
+	terminal_names: Box<str>,
 
-	boolean_capabilities: Vec<Capability<bool>>,
-	number_capabilities: Vec<Capability<u32>>,
-	string_capabilities: Vec<Capability<TrustedRange<StringsTable>>>,
+	boolean_capabilities: Box<[Capability<bool>]>,
+	number_capabilities: Box<[Capability<u32>]>,
+	string_capabilities: Box<[Capability<TrustedRange<StringsTable>>]>,
 	strings_table: StringsTable,
 
-	extended_boolean_capabilities: Vec<(TrustedRange<ExtendedStringsTable>, bool)>,
-	extended_number_capabilities: Vec<(TrustedRange<ExtendedStringsTable>, u32)>,
-	extended_string_capabilities: Vec<(TrustedRange<ExtendedStringsTable>, Capability<TrustedRange<ExtendedStringsTable>>)>,
+	extended_boolean_capabilities: Box<[(TrustedRange<ExtendedStringsTable>, bool)]>,
+	extended_number_capabilities: Box<[(TrustedRange<ExtendedStringsTable>, u32)]>,
+	extended_string_capabilities: Box<[(TrustedRange<ExtendedStringsTable>, Capability<TrustedRange<ExtendedStringsTable>>)]>,
 	extended_strings_table: ExtendedStringsTable,
 
 	cached_capabilities: CachedCapabilities,
@@ -46,21 +46,21 @@ pub enum Capability<T> {
 // to ensure that a range is only used with the table that it was derived from.
 
 #[repr(transparent)]
-struct StringsTable(Vec<u8>);
+struct StringsTable(Box<[u8]>);
 
 #[repr(transparent)]
-struct ExtendedStringsTable(Vec<u8>);
+struct ExtendedStringsTable(Box<[u8]>);
 
 #[derive(Default)]
 struct CachedCapabilities {
-	alternate_screen: CacheEntry<(Vec<u8>, Vec<u8>)>,
-	clear_line: CacheEntry<Vec<u8>>,
-	clear_screen: CacheEntry<Vec<u8>>,
-	clear_scrollback: CacheEntry<Vec<u8>>,
-	hide_cursor: CacheEntry<(Vec<u8>, Vec<u8>)>,
-	move_cursor: CacheEntry<Vec<parameterized::Expr>>,
-	no_wraparound: CacheEntry<(Vec<u8>, Vec<u8>)>,
-	sync: CacheEntry<(Vec<u8>, Vec<u8>)>,
+	alternate_screen: CacheEntry<(Box<[u8]>, Box<[u8]>)>,
+	clear_line: CacheEntry<Box<[u8]>>,
+	clear_screen: CacheEntry<Box<[u8]>>,
+	clear_scrollback: CacheEntry<Box<[u8]>>,
+	hide_cursor: CacheEntry<(Box<[u8]>, Box<[u8]>)>,
+	move_cursor: CacheEntry<Box<[parameterized::Expr]>>,
+	no_wraparound: CacheEntry<(Box<[u8]>, Box<[u8]>)>,
+	sync: CacheEntry<(Box<[u8]>, Box<[u8]>)>,
 }
 
 #[derive(Debug, Default)]
@@ -145,12 +145,14 @@ impl Terminfo {
 			std::ffi::CString::from_vec_with_nul(terminal_names)
 			.map_err(|_| ParseError::MalformedString)?
 			.into_string()
-			.map_err(ParseError::TerminalNameNotUtf8)?;
+			.map_err(ParseError::TerminalNameNotUtf8)?
+			.into();
 
 		let mut boolean_capabilities = vec![Capability::Absent; boolean_capabilities_num.0];
 		for b in &mut boolean_capabilities {
 			*b = read_boolean(f)?;
 		}
+		let boolean_capabilities = boolean_capabilities.into();
 
 		read_nul_if_odd(f, (terminal_names_num_bytes + boolean_capabilities_num)?)?;
 
@@ -158,6 +160,7 @@ impl Terminfo {
 		for n in &mut number_capabilities {
 			*n = reader.read_number(f)?;
 		}
+		let number_capabilities = number_capabilities.into();
 
 		let mut string_capabilities_offsets = vec![Capability::Absent; string_capabilities_num.0];
 		for offset in &mut string_capabilities_offsets {
@@ -169,9 +172,9 @@ impl Terminfo {
 			};
 		}
 
-		let mut strings_table = vec![0_u8; strings_table_num_bytes.0];
-		f.read_exact(&mut strings_table).map_err(ParseError::Io)?;
-		let strings_table = StringsTable(strings_table);
+		let mut strings_table = StringsTable(vec![0_u8; strings_table_num_bytes.0].into());
+		f.read_exact(&mut strings_table.0).map_err(ParseError::Io)?;
+		let strings_table = strings_table;
 
 		let mut string_capabilities = Vec::with_capacity(string_capabilities_offsets.len());
 		for string_capabilities_offset in string_capabilities_offsets {
@@ -186,6 +189,7 @@ impl Terminfo {
 			};
 			string_capabilities.push(s);
 		}
+		let string_capabilities = string_capabilities.into();
 
 		let mut result = Terminfo {
 			terminal_names,
@@ -195,10 +199,10 @@ impl Terminfo {
 			string_capabilities,
 			strings_table,
 
-			extended_boolean_capabilities: vec![],
-			extended_number_capabilities: vec![],
-			extended_string_capabilities: vec![],
-			extended_strings_table: ExtendedStringsTable(vec![]),
+			extended_boolean_capabilities: Box::new([]),
+			extended_number_capabilities: Box::new([]),
+			extended_string_capabilities: Box::new([]),
+			extended_strings_table: ExtendedStringsTable(Box::new([])),
 
 			cached_capabilities: Default::default(),
 
@@ -267,9 +271,9 @@ impl Terminfo {
 			};
 		}
 
-		let mut extended_strings_table = vec![0_u8; extended_strings_table_num_bytes.0];
-		f.read_exact(&mut extended_strings_table).map_err(ParseError::Io)?;
-		let extended_strings_table = ExtendedStringsTable(extended_strings_table);
+		let mut extended_strings_table = ExtendedStringsTable(vec![0_u8; extended_strings_table_num_bytes.0].into());
+		f.read_exact(&mut extended_strings_table.0).map_err(ParseError::Io)?;
+		let extended_strings_table = extended_strings_table;
 
 		let mut extended_string_capabilities = Vec::with_capacity(extended_string_capabilities_offsets.len());
 		for start in extended_string_capabilities_offsets {
@@ -385,7 +389,7 @@ macro_rules! terminfo_caching_method_enable_disable {
 							let disable = self.string_capabilities().nth($disable);
 
 							if let (Some(Capability::Value(enable)), Some(Capability::Value(disable))) = (enable, disable) {
-								self.cached_capabilities.$name = CacheEntry::Present((enable.to_owned(), disable.to_owned()));
+								self.cached_capabilities.$name = CacheEntry::Present((enable.into(), disable.into()));
 							}
 							else {
 								self.cached_capabilities.$name = CacheEntry::Absent;
@@ -414,7 +418,7 @@ macro_rules! terminfo_caching_method_single {
 							let value = self.string_capabilities().nth($i);
 
 							if let Some(Capability::Value(value)) = value {
-								self.cached_capabilities.$name = CacheEntry::Present(value.to_owned());
+								self.cached_capabilities.$name = CacheEntry::Present(value.into());
 							}
 							else {
 								self.cached_capabilities.$name = CacheEntry::Absent;
@@ -443,7 +447,7 @@ macro_rules! terminfo_caching_method_extended_single {
 								.find_map(|(name, value)| (name == $i).then_some(value));
 
 							if let Some(Capability::Value(value)) = value {
-								self.cached_capabilities.$name = CacheEntry::Present(value.to_owned());
+								self.cached_capabilities.$name = CacheEntry::Present(value.into());
 							}
 							else {
 								self.cached_capabilities.$name = CacheEntry::Absent;
@@ -478,7 +482,7 @@ impl Terminfo {
 
 					if let Some(Capability::Value(value)) = value {
 						let expr = parameterized::parse(value).map_err(ParameterizedStringError::Parse)?;
-						self.cached_capabilities.move_cursor = CacheEntry::Present(expr);
+						self.cached_capabilities.move_cursor = CacheEntry::Present(expr.into());
 					}
 					else {
 						self.cached_capabilities.move_cursor = CacheEntry::Absent;
@@ -511,7 +515,7 @@ impl Terminfo {
 						parameterized::eval(&expr, &mut [1], &mut begin).map_err(ParameterizedStringError::Eval)?;
 						let mut end = vec![];
 						parameterized::eval(&expr, &mut [2], &mut end).map_err(ParameterizedStringError::Eval)?;
-						self.cached_capabilities.sync = CacheEntry::Present((begin, end));
+						self.cached_capabilities.sync = CacheEntry::Present((begin.into(), end.into()));
 					}
 					else {
 						self.cached_capabilities.sync = CacheEntry::Absent;
