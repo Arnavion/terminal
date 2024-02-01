@@ -62,6 +62,7 @@ struct CachedCapabilities {
 	hide_cursor: CacheEntry<(Box<[u8]>, Box<[u8]>)>,
 	move_cursor: CacheEntry<Box<[parameterized::Expr]>>,
 	no_wraparound: CacheEntry<(Box<[u8]>, Box<[u8]>)>,
+	write_status_line: CacheEntry<(Box<[u8]>, Box<[u8]>)>,
 	sync: CacheEntry<(Box<[u8]>, Box<[u8]>)>,
 }
 
@@ -516,19 +517,20 @@ macro_rules! terminfo_caching_method_extended_single {
 
 // TODO: Parse indices from term.h instead of hard-coding? But that requires ncurses-devel to be installed.
 // Hard-coded values are correct for Linux anyway.
-terminfo_caching_method_enable_disable!(alternate_screen => [28, 40]);
-terminfo_caching_method_single!(clear_line => [6]);
-terminfo_caching_method_single!(clear_screen => [5]);
+terminfo_caching_method_enable_disable!(alternate_screen => [28, 40]); // smcup, rmcup
+terminfo_caching_method_single!(clear_line => [6]); // el
+terminfo_caching_method_single!(clear_screen => [5]); // clear
 terminfo_caching_method_extended_single!(clear_scrollback => [b"E3"]);
-terminfo_caching_method_enable_disable!(hide_cursor => [13, 16]);
-terminfo_caching_method_enable_disable!(no_wraparound => [152, 151]);
+terminfo_caching_method_enable_disable!(hide_cursor => [13, 16]); // civis, cnorm
+terminfo_caching_method_enable_disable!(no_wraparound => [152, 151]); // rmam, smam
+terminfo_caching_method_enable_disable!(write_status_line => [135, 47]); // tsl, fsl
 
 impl Terminfo {
 	pub fn move_cursor(&mut self, row: i32, col: i32, out: &mut Vec<u8>) -> Result<(), ParameterizedStringError> {
 		loop {
 			match self.cached_capabilities.move_cursor {
 				CacheEntry::Unknown => {
-					let value = self.string_capabilities().nth(10);
+					let value = self.string_capabilities().nth(10); // cup
 
 					if let Some(Capability::Value(value)) = value {
 						let expr = parameterized::parse(value).map_err(ParameterizedStringError::Parse)?;
@@ -1016,6 +1018,7 @@ mod tests {
 			hide_cursor() = b"\x1b[?25l" / b"\x1b[?12l\x1b[?25h",
 			move_cursor(2, 0).unwrap() => b"\x1b[3;1H",
 			no_wraparound() = b"\x1b[?7l" / b"\x1b[?7h",
+			write_status_line() = b"\x1b]2;" / b"\x1b\\",
 			sync().unwrap() = b"\x1b[?2026h" / b"\x1b[?2026l",
 		}
 
@@ -1027,6 +1030,7 @@ mod tests {
 			hide_cursor() = b"\x1b[?25l" / b"\x1b[?12l\x1b[?25h",
 			move_cursor(2, 0).unwrap() => b"\x1b[3;1H",
 			no_wraparound() = b"\x1b[?7l" / b"\x1b[?7h",
+			write_status_line() = b"" / b"",
 			sync().unwrap() = b"" / b"",
 		}
 
@@ -1038,6 +1042,7 @@ mod tests {
 			hide_cursor() = b"\x1b[?25l" / b"\x1b[34h\x1b[?25h",
 			move_cursor(2, 0).unwrap() => b"\x1b[3;1H",
 			no_wraparound() = b"" / b"",
+			write_status_line() = b"" / b"",
 			sync().unwrap() = b"" / b"",
 		}
 
@@ -1049,6 +1054,7 @@ mod tests {
 			hide_cursor() = b"\x1b[?25l" / b"\x1b[?25h",
 			move_cursor(2, 0).unwrap() => b"\x1b[3;1H",
 			no_wraparound() = b"" / b"",
+			write_status_line() = b"\x1b]0;" / b"\x07",
 			sync().unwrap() = b"" / b"",
 		}
 
@@ -1060,6 +1066,7 @@ mod tests {
 			hide_cursor() = b"\x1b[?25l" / b"\x1b[34h\x1b[?25h",
 			move_cursor(2, 0).unwrap() => b"\x1b[3;1H",
 			no_wraparound() = b"\x1b[?7l" / b"\x1b[?7h",
+			write_status_line() = b"\x1b]0;" / b"\x07",
 			sync().unwrap() = b"" / b"",
 		}
 
@@ -1071,6 +1078,7 @@ mod tests {
 			hide_cursor() = b"\x1b[?25l" / b"\x1b[?12l\x1b[?25h",
 			move_cursor(2, 0).unwrap() => b"\x1b[3;1H",
 			no_wraparound() = b"\x1b[?7l" / b"\x1b[?7h",
+			write_status_line() = b"" / b"",
 			sync().unwrap() = b"" / b"",
 		}
 	}
