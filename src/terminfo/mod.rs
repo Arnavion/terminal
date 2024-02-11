@@ -1010,7 +1010,7 @@ mod tests {
 	}
 
 	test_terms! {
-		foot_extra("foot-extra") {
+		foot_direct("foot-direct") {
 			alternate_screen() = b"\x1b[?1049h\x1b[22;0;0t" / b"\x1b[?1049l\x1b[23;0;0t",
 			clear_line() = b"\x1b[K",
 			clear_screen() = b"\x1b[H\x1b[2J",
@@ -1019,7 +1019,7 @@ mod tests {
 			move_cursor(2, 0).unwrap() => b"\x1b[3;1H",
 			no_wraparound() = b"\x1b[?7l" / b"\x1b[?7h",
 			write_status_line() = b"\x1b]2;" / b"\x1b\\",
-			sync().unwrap() = b"\x1b[?2026h" / b"\x1b[?2026l",
+			sync().unwrap() = b"" / b"",
 		}
 
 		ms_terminal("ms-terminal") {
