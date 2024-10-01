@@ -1,4 +1,4 @@
-/// Parameterized strings parser and evaulator
+//! Parameterized strings parser and evaluator
 
 mod eval;
 pub use eval::{eval, EvalError};
