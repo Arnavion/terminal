@@ -125,7 +125,7 @@ impl RawTerminfo {
 
 			match std::fs::File::open(&term_path) {
 				Ok(f) => break (term_path, f),
-				Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+				Err(err) if err.kind() == std::io::ErrorKind::NotFound => (),
 				Err(err) => return Err(FromTermNameError::File { path: term_path, inner: err }),
 			}
 		};
@@ -213,7 +213,7 @@ impl RawTerminfo {
 			Ok(()) => (),
 			Err(ParseError::Io(err)) if err.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(result),
 			Err(err) => return Err(err),
-		};
+		}
 
 		let extended_boolean_capabilities_num = match read_short(f) {
 			Ok(extended_boolean_capabilities_num) => extended_boolean_capabilities_num,
@@ -672,7 +672,7 @@ impl StringsStorage for StringsTable {
 	}
 
 	unsafe fn get_unchecked(&self, range: std::ops::Range<usize>) -> &[u8] {
-		self.0.get_unchecked(range)
+		unsafe { self.0.get_unchecked(range) }
 	}
 }
 
@@ -682,7 +682,7 @@ impl StringsStorage for ExtendedStringsTable {
 	}
 
 	unsafe fn get_unchecked(&self, range: std::ops::Range<usize>) -> &[u8] {
-		self.0.get_unchecked(range)
+		unsafe { self.0.get_unchecked(range) }
 	}
 }
 
@@ -1129,8 +1129,8 @@ mod tests {
 
 		let mut errors = vec![];
 
-		let admin_entries = if let Ok(entries) = std::fs::read_dir("/etc/terminfo") { Some(entries) } else { None };
-		let distro_entries = if let Ok(entries) = std::fs::read_dir("/usr/share/terminfo") { Some(entries) } else { None };
+		let admin_entries = std::fs::read_dir("/etc/terminfo").ok();
+		let distro_entries = std::fs::read_dir("/usr/share/terminfo").ok();
 		let entries = admin_entries.into_iter().flatten().chain(distro_entries.into_iter().flatten());
 		for entry in entries {
 			let Ok(entry) = entry else { continue; };
