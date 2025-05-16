@@ -148,7 +148,7 @@ fn parse_integer(rest: &mut &[u8]) -> Result<i32, ParseError> {
 	}
 
 	let i =
-		std::str::from_utf8(s)
+		str::from_utf8(s)
 		.map_err(|_| ("integer", Some(s)))?
 		.parse()
 		.map_err(|_| ("integer", Some(s)))?;
@@ -216,7 +216,7 @@ fn parse_printf(rest: &mut &[u8]) -> Result<Expr, ParseError> {
 			*rest = rest_;
 
 			let width =
-				std::str::from_utf8(s)
+				str::from_utf8(s)
 				.map_err(|_| ("printf width", Some(s)))?
 				.parse()
 				.map_err(|_| ("printf width", Some(s)))?;
@@ -227,7 +227,7 @@ fn parse_printf(rest: &mut &[u8]) -> Result<Expr, ParseError> {
 				*rest = rest_;
 
 				let precision =
-					std::str::from_utf8(s)
+					str::from_utf8(s)
 					.map_err(|_| ("printf precision", Some(s)))?
 					.parse()
 					.map_err(|_| ("printf precision", Some(s)))?;
