@@ -140,8 +140,7 @@ fn parse_param_num(rest: &mut &[u8]) -> Result<usize, ParseError> {
 fn parse_integer(rest: &mut &[u8]) -> Result<i32, ParseError> {
 	let end = rest.iter().position(|&b| b == b'}').unwrap_or(rest.len());
 
-	// TODO: Use split_at_unchecked when that is stabilized
-	let (s, rest_) = unsafe { (rest.get_unchecked(..end), rest.get_unchecked(end..)) };
+	let (s, rest_) = unsafe { rest.split_at_unchecked(end) };
 	*rest = rest_;
 
 	if !split_start(rest, b"}") {
@@ -213,8 +212,7 @@ fn parse_printf(rest: &mut &[u8]) -> Result<Expr, ParseError> {
 	let width_and_precision =
 		if let b'1'..=b'9' = rest.first().ok_or(("printf width or kind", None::<u8>))? {
 			let end = rest.iter().position(|&b| !b.is_ascii_digit()).unwrap_or(rest.len());
-			// TODO: Use split_at_unchecked when that is stabilized
-			let (s, rest_) = unsafe { (rest.get_unchecked(..end), rest.get_unchecked(end..)) };
+			let (s, rest_) = unsafe { rest.split_at_unchecked(end) };
 			*rest = rest_;
 
 			let width =
@@ -225,8 +223,7 @@ fn parse_printf(rest: &mut &[u8]) -> Result<Expr, ParseError> {
 
 			if split_start(rest, b".") {
 				let end = rest.iter().position(|&b| !b.is_ascii_digit()).unwrap_or(rest.len());
-				// TODO: Use split_at_unchecked when that is stabilized
-				let (s, rest_) = unsafe { (rest.get_unchecked(..end), rest.get_unchecked(end..)) };
+				let (s, rest_) = unsafe { rest.split_at_unchecked(end) };
 				*rest = rest_;
 
 				let precision =
