@@ -68,9 +68,9 @@ impl<W> RawMode<W> where W: std::os::fd::AsRawFd {
 
 			let original_termios = termios;
 
-			libc::cfmakeraw(&mut termios);
+			libc::cfmakeraw(&raw mut termios);
 
-			zero_or_errno(libc::tcsetattr(inner_fd, 0, &termios))?;
+			zero_or_errno(libc::tcsetattr(inner_fd, 0, &raw const termios))?;
 
 			Ok(RawMode {
 				inner,
@@ -84,7 +84,7 @@ impl<W> Drop for RawMode<W> where W: std::os::fd::AsRawFd {
 	fn drop(&mut self) {
 		unsafe {
 			let inner_fd = std::os::fd::AsRawFd::as_raw_fd(&self.inner);
-			let _ = libc::tcsetattr(inner_fd, 0, &self.original_termios);
+			let _ = libc::tcsetattr(inner_fd, 0, &raw const self.original_termios);
 		}
 	}
 }
