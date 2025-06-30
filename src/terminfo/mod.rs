@@ -1155,24 +1155,20 @@ mod tests {
 				};
 
 				for value in terminfo.string_capabilities() {
-					if let Capability::Value(value) = value {
-						if let Some(err) = parse_parameterized_string(value) {
-							errors.push(format!(
-								"could not parse string capability of {} : {} : {err}",
-								entry.path().display(), value.escape_ascii(),
-							));
-						}
+					if let Capability::Value(value) = value && let Some(err) = parse_parameterized_string(value) {
+						errors.push(format!(
+							"could not parse string capability of {} : {} : {err}",
+							entry.path().display(), value.escape_ascii(),
+						));
 					}
 				}
 
 				for (name, value) in terminfo.extended_string_capabilities() {
-					if let Capability::Value(value) = value {
-						if let Some(err) = parse_parameterized_string(value) {
-							errors.push(format!(
-								"could not parse string capability of {} : {} = {} : {err}",
-								entry.path().display(), name.escape_ascii(), value.escape_ascii(),
-							));
-						}
+					if let Capability::Value(value) = value && let Some(err) = parse_parameterized_string(value) {
+						errors.push(format!(
+							"could not parse string capability of {} : {} = {} : {err}",
+							entry.path().display(), name.escape_ascii(), value.escape_ascii(),
+						));
 					}
 				}
 			}
